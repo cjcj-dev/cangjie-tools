@@ -208,6 +208,7 @@ bool initFSWatcher(const char *arg, callback c, bool verbose) {
         return false;
     }
 
+    running = true;
     std::lock_guard<std::mutex> lock(cb_mutex);
     cb = c;
     if (verbose) std::cout << "initFSWatcher ends" << std::endl;
@@ -218,11 +219,10 @@ void startFSWatcher(bool verbose) {
     if (verbose) std::cout << "startFSWatcher starts" << std::endl;
     {
         std::lock_guard<std::mutex> state_lock(global_state_mutex);
-        if (running || g_async == nullptr || g_fs_events.empty()) {
-            std::cout << "startFSWatcher failed: there's another running FSWatcher" << std::endl;
+        if (!running || g_async == nullptr || g_fs_events.empty()) {
+            std::cout << "startFSWatcher failed: there's no initialized FSWatcher" << std::endl;
             return;
         }
-        running = true;
     }
     uv_run(uv_default_loop(), UV_RUN_DEFAULT);
     if (verbose) std::cout << "clean FSWatcher" << std::endl;

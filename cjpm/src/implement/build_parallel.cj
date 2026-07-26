@@ -46,8 +46,9 @@ enum MonitorNotification {
 var cjoWatcherCb: (String) -> Unit = { _ => }
 
 @When[(os != "iOS") && (env != "ohos") && (env != "android")]
-func startCjoWatcher(verbose: Bool): Unit {
+func startCjoWatcher(verbose: Bool, ready: LinkedBlockingQueue<Bool>): Unit {
     if (cjoFileToTaskId.isEmpty()) {
+        ready.add(false)
         return
     }
     
@@ -60,6 +61,7 @@ func startCjoWatcher(verbose: Bool): Unit {
     }
     
     if (dirsToWatch.isEmpty()) {
+        ready.add(false)
         return
     }
     
@@ -82,14 +84,16 @@ func startCjoWatcher(verbose: Bool): Unit {
         let res = initFSWatcher(cs, { cjo => cjoWatcherCb(cjo.toString()) }, verbose)
         LibC.free(cs)
         if (!res) {
+            ready.add(false)
             return
         }
+        ready.add(true)
         startFSWatcher(verbose)
     }
 }
 
 @When[(os == "iOS") || (env == "ohos") || (env == "android")]
-func startCjoWatcher(_: Bool): Unit {}
+func startCjoWatcher(_: Bool, ready: LinkedBlockingQueue<Bool>): Unit { ready.add(false) }
 
 @When[(os != "iOS") && (env != "ohos") && (env != "android")]
 func stopCjoWatcher(verbose: Bool): Unit {
@@ -323,14 +327,18 @@ private func executeWithFileWatcher<T>(buildConfig: BuildConfig, body: () -> T):
         return body()
     }
 
+    let watcherReady = LinkedBlockingQueue<Bool>()
     let cjoWatcherFuture = spawn { =>
-        startCjoWatcher(buildConfig.isVerbose)
+        startCjoWatcher(buildConfig.isVerbose, watcherReady)
     }
+    let watcherStarted = watcherReady.remove()
 
     let result = try {
         body()
     } finally {
-        stopCjoWatcher(buildConfig.isVerbose)
+        if (watcherStarted) {
+            stopCjoWatcher(buildConfig.isVerbose)
+        }
         let _ = cjoWatcherFuture.get()
     }
 
