@@ -1601,6 +1601,9 @@ private class Rebuilder {
     private func waitForDependencies(id: TaskId): Array<TaskResult> {
         let depsToWait = match (id) {
             case Monitor(_, _, _, _, _) => Array<TaskId>()
+            case Link(_, _, _, _, _, _) =>
+                dirtyGraph.incomingClosure([id]).toposort.iterator()
+                    .filter { it => it != id } |> collectArray
             case _ => dirtyGraph.incoming(id)
         }
         depsToWait.map { it: TaskId => futureMap[it].get() }
