@@ -1387,9 +1387,7 @@ func createPackageCompileTasks(r: ResolveItem, buildConfig: BuildConfig, product
                 let taskId = TaskId.Link(fullName, target, isDebug, mockSupported, outputType, sourceSetDir)
                 let prevStageObj = Path(task.targetPath).join(getOutput(task).getOrThrow()).toString()
                 var linkRequireTasks = HashSet<TaskId>()
-                let linkRequireNames = HashSet<String>(requireTasksIterable)
-                linkRequireNames.add(all: getDepSet(fullName, buildConfig))
-                for (name in linkRequireNames where productOutputTypes.contains(name)) {
+                for (name in requireTasksIterable where productOutputTypes.contains(name)) {
                     let isMacroName = buildConfig.packageList.isMacro(name)
                     let depOutputType = productOutputTypes[name]
                     let depSourceSetDir = productSuffixes.get(name) ?? ""
