@@ -283,7 +283,7 @@ public func verifyTargetConfig(targetConfigMap: HashMap<String, TargetConfig>, p
 
 func verifyTargetInfo(targetInfo: TargetInfo, path: String, configFilePath: String, isTest: Bool): Bool {
     if (!safeCheck(targetInfo.compileOption, configFilePath) ||
-        !safeCheck(targetInfo.overrideCompileOption, configFilePath) || !safeCheck(targetInfo.linkOption, configFilePath
+        !safeCheck(targetInfo.overrideCompileOption, configFilePath) || !verifyLinkOption(targetInfo.linkOption, configFilePath
     )) {
         return false
     }

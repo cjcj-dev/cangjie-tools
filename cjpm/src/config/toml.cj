@@ -491,7 +491,25 @@ public func verifyModuleConfigPost(cfg: TomlInfo, path: String, isTest!: Bool = 
 }
 
 func verifyLinkOption(option: String, configFilePath: String): Bool {
-    return safeCheck(option, configFilePath)
+    var uncheckedOption = option
+    var optionWithoutOrigin = ""
+    while (let Some(originIndex) <- uncheckedOption.indexOf(b'$')) {
+        optionWithoutOrigin += uncheckedOption[..originIndex]
+        let suffix = uncheckedOption[originIndex..]
+        if (suffix.startsWith("${ORIGIN}")) {
+            uncheckedOption = suffix[9..]
+            continue
+        }
+        if (suffix.startsWith("$ORIGIN") && (suffix.size == 7 ||
+            (!suffix[7].isAsciiLetter() && !suffix[7].isAsciiNumber() && suffix[7] != b'_'))) {
+            uncheckedOption = suffix[7..]
+            continue
+        }
+        optionWithoutOrigin += "$"
+        uncheckedOption = suffix[1..]
+    }
+    optionWithoutOrigin += uncheckedOption
+    return if (safeCheckResult(optionWithoutOrigin).isOk) { true } else { safeCheck(option, configFilePath) }
 }
 
 func verifyAll<T>(location: String, checkList: T): Bool where T <: Iterable<((String, String) -> Bool, ?String)> {
