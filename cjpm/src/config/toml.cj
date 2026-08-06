@@ -212,14 +212,14 @@ public class TomlInfo <: Serializable<TomlInfo> {
 
         this.pkg.compileOption = replaceEnvVars(this.pkg.compileOption)
         this.pkg.overrideCompileOption = replaceEnvVars(this.pkg.overrideCompileOption)
-        this.pkg.linkOption = replaceEnvVars(this.pkg.linkOption)
+        this.pkg.linkOption = replaceEnvVars(this.pkg.linkOption.replace(#"${ORIGIN}"#, "$ORIGIN"))
         this.pkg.nativeCompileOption = replaceEnvVars(this.pkg.nativeCompileOption)
         this.pkg.nativeLinkOption = replaceEnvVars(this.pkg.nativeLinkOption)
         this.pkg.targetDir = replaceEnvVars(this.pkg.targetDir)
         this.pkg.scriptDir = replaceEnvVars(this.pkg.scriptDir)
         this.workspace.compileOption = replaceEnvVars(this.workspace.compileOption)
         this.workspace.overrideCompileOption = replaceEnvVars(this.workspace.overrideCompileOption)
-        this.workspace.linkOption = replaceEnvVars(this.workspace.linkOption)
+        this.workspace.linkOption = replaceEnvVars(this.workspace.linkOption.replace(#"${ORIGIN}"#, "$ORIGIN"))
         this.workspace.targetDir = replaceEnvVars(this.workspace.targetDir)
         this.workspace.scriptDir = replaceEnvVars(this.workspace.scriptDir)
         for (k in 0..this.workspace.members.size) {

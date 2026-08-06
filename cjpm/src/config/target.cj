@@ -84,7 +84,7 @@ public class TargetInfo <: Serializable<TargetInfo> {
     public func replaceEnvVars(): Unit {
         this.compileOption = replaceEnvVars(this.compileOption)
         this.overrideCompileOption = replaceEnvVars(this.overrideCompileOption)
-        this.linkOption = replaceEnvVars(this.linkOption)
+        this.linkOption = replaceEnvVars(this.linkOption.replace(#"${ORIGIN}"#, "$ORIGIN"))
         for ((_, dep) in this.dependencies) {
             if (dep.path.isSome()) {
                 dep.path = replaceEnvVars(dep.path.getOrThrow())
