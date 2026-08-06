@@ -496,7 +496,7 @@ func verifyLinkOption(option: String, configFilePath: String): Bool {
     while (let Some(originIndex) <- uncheckedOption.indexOf(b'$')) {
         optionWithoutOrigin += uncheckedOption[..originIndex]
         let suffix = uncheckedOption[originIndex..]
-        if (suffix.startsWith("${ORIGIN}")) {
+        if (suffix.startsWith("$${ORIGIN}")) {
             uncheckedOption = suffix[9..]
             continue
         }
