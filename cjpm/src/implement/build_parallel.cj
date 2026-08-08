@@ -1501,6 +1501,7 @@ private class Rebuilder {
     private let logger: BoundedFileLogger
     private let verbose: Bool
     private let semaphore: ?Semaphore
+    private let jobserver: ?Jobserver
     private let barrier: Barrier
     private let rebuiltTasks: HashSet<TaskId> = HashSet<TaskId>()
 
@@ -1522,6 +1523,10 @@ private class Rebuilder {
             case None => None
             case Some(maxJobs) => Some(Semaphore(maxJobs))
         }
+        this.jobserver = match (jobs) {
+            case None => None
+            case Some(maxJobs) => createJobserver(maxJobs)
+        }
         this.barrier = Barrier(tasksCount + 1)
     }
 
@@ -1537,7 +1542,13 @@ private class Rebuilder {
         }
 
         barrier.wait()
-        return collectResults()
+        return try {
+            collectResults()
+        } finally {
+            if (let Some(server) <- jobserver) {
+                finishJobserver(server)
+            }
+        }
     }
 
     func getRebuiltTasks(): HashSet<TaskId> {
@@ -1548,9 +1559,20 @@ private class Rebuilder {
         match ((semaphore, canAcquire)) {
             case (Some(s), true) =>
                 s.acquire()
-                let result = body()
-                s.release()
-                result
+                try {
+                    if (let Some(server) <- jobserver) {
+                        let permit = server.acquire()
+                        try {
+                            body()
+                        } finally {
+                            permit.release()
+                        }
+                    } else {
+                        body()
+                    }
+                } finally {
+                    s.release()
+                }
             case _ => body()
         }
     }
@@ -1871,6 +1893,7 @@ private func callCompiler(compileTask: CompileTask, args: ArrayList<String>, env
     var execCmdFlag: Bool = true
 
     specifyCjcJobs(args, buildConfig.cjcJobs)
+    configureJobserverEnvironment(envBuilder)
 
     let env = getVariables()
     let commandStr = getCmdStr(envBuilder.asCliStrings(env), COMPILE_TOOL, args)
