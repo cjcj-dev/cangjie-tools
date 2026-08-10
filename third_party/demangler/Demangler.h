@@ -15,6 +15,7 @@
 #endif
 #include <functional>
 #include <cassert>
+#include <cstdint>   // uint32_t/uint64_t: GCC 13+ no longer pulls this in transitively (Demangler.h:246)
 
 
 namespace Cangjie {
