@@ -56,15 +56,10 @@ public func execWithOutput(exeTool: String, arguments: ArrayList<String>,
                 stdOut: ProcessRedirect.Pipe, stdErr: ProcessRedirect.Pipe)
         }
 
-        if (spawnForScript) {
-            let outInfoFuture = spawn {StringReader(subProcess.stdOutPipe).readToEnd()}
-            let errInfoFuture = spawn {StringReader(subProcess.stdErrPipe).readToEnd()}
-            outInfo = outInfoFuture.get()
-            errInfo = errInfoFuture.get()
-        } else {
-            outInfo = StringReader(subProcess.stdOutPipe).readToEnd()
-            errInfo = StringReader(subProcess.stdErrPipe).readToEnd()
-        }
+        let outInfoFuture = spawn {StringReader(subProcess.stdOutPipe).readToEnd()}
+        let errInfoFuture = spawn {StringReader(subProcess.stdErrPipe).readToEnd()}
+        outInfo = outInfoFuture.get()
+        errInfo = errInfoFuture.get()
         returnCode = subProcess.wait(timeout: timeout)
         return (returnCode == 0, outInfo, errInfo)
     } catch (e: Exception) {
