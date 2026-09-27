@@ -198,7 +198,7 @@ static std::string GetPathStr(const CHIR::Value *base, const std::vector<uint64_
 template <typename T>
 DataflowRuleP02Check::MemberVarInChain DataflowRuleP02Check::GetMemberVarInChain(const T* getElementRef)
 {
-    auto base = getElementRef->GetLocation();
+    auto base = getElementRef->GetBase();
     auto path = getElementRef->GetPath();
     if (!base->IsLocalVar()) {
         std::string str = base->GetSrcCodeIdentifier();
@@ -381,8 +381,7 @@ void DataflowRuleP02Check::CheckSpawnClosure(const CHIR::Lambda *spawnClosure)
                 if (!expr->IsTerminator()) {
                     CheckNonTerminal(expr, isLock);
                 } else {
-                    auto term = StaticCast<CHIR::Terminator *>(expr);
-                    for (auto block : term->GetSuccessors()) {
+                    for (auto block : expr->GetSuccessors()) {
                         visitBlock(block, isLock, visited);
                     }
                 }
@@ -416,8 +415,8 @@ template <typename T> void DataflowRuleP02Check::CheckApplyOrInVoke(const CHIR::
     if (CommonFunc::FindCHIRFunction(apply->GetCallee(), spawnFunc)) {
         auto lambdaVar = StaticCast<CHIR::LocalVar *>(apply->GetArgs()[1]);
         auto lambdaExpr = lambdaVar->GetExpr();
-        if (lambdaExpr->GetExprKind() == CHIR::ExprKind::TYPECAST) {
-            auto cast = StaticCast<const CHIR::TypeCast*>(lambdaExpr);
+        if (lambdaExpr->GetExprKind() == CHIR::ExprKind::CLASS_STATIC_CAST) {
+            auto cast = StaticCast<const CHIR::ClassStaticCast*>(lambdaExpr);
             CJC_ASSERT(cast->GetSourceValue()->IsLocalVar());
             lambdaExpr = StaticCast<const CHIR::LocalVar*>(cast->GetSourceValue())->GetExpr();
         }
@@ -435,8 +434,8 @@ void DataflowRuleP02Check::CheckBasedOnCHIRFunc(CHIR::BlockGroup& body)
         }
         if (exprKind == CHIR::ExprKind::APPLY) {
             CheckApplyOrInVoke<CHIR::Apply>(expr);
-        } else if (exprKind == CHIR::ExprKind::APPLY_WITH_EXCEPTION) {
-            CheckApplyOrInVoke<CHIR::ApplyWithException>(expr);
+        } else if (exprKind == CHIR::ExprKind::TRY_APPLY) {
+            CheckApplyOrInVoke<CHIR::TryApply>(expr);
         }
         return CHIR::VisitResult::CONTINUE;
     });
