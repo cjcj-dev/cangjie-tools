@@ -118,9 +118,9 @@ static std::string GetSpecialLogMsg(Ptr<CHIR::Apply> apply, const CHIR::ConstDom
     return GetSpecialLogMsg<CHIR::Apply>(apply, state);
 }
 
-static std::string GetSpecialLogMsg(Ptr<CHIR::ApplyWithException> applyWithExcept, const CHIR::ConstDomain& state)
+static std::string GetSpecialLogMsg(Ptr<CHIR::TryApply> tryApply, const CHIR::ConstDomain& state)
 {
-    return GetSpecialLogMsg<CHIR::ApplyWithException>(applyWithExcept, state);
+    return GetSpecialLogMsg<CHIR::TryApply>(tryApply, state);
 }
 // For 'SimpleLogger.log()', require the log level to be not equal to 0, where 0 indicates off.
 template <typename T> static bool GetLogLevel(Ptr<T> apply, int index)
@@ -158,9 +158,9 @@ static std::string GetGeneralLogMsg(Ptr<CHIR::Apply> apply, const CHIR::ConstDom
     return GetGeneralLogMsg<CHIR::Apply>(apply, state);
 }
 
-static std::string GetGeneralLogMsg(Ptr<CHIR::ApplyWithException> apply, const CHIR::ConstDomain& state)
+static std::string GetGeneralLogMsg(Ptr<CHIR::TryApply> apply, const CHIR::ConstDomain& state)
 {
-    return GetGeneralLogMsg<CHIR::ApplyWithException>(apply, state);
+    return GetGeneralLogMsg<CHIR::TryApply>(apply, state);
 }
 
 static std::string GetGeneralLogMsg(Ptr<CHIR::Invoke> invoke, const CHIR::ConstDomain& state)
@@ -258,20 +258,17 @@ void DataflowRuleGOTH01Check::CheckBasedOnCHIR(CHIR::Package &package)
     }
     const auto actionBeforeVisitExpr = [](const CHIR::ConstDomain&, CHIR::Expression*, size_t) {};
     const auto actionAfterVisitExpr = [this](const CHIR::ConstDomain& state, CHIR::Expression* expr, size_t) {
-        if (expr->IsApply()) {
-            auto apply = StaticCast<Cangjie::CHIR::Apply*>(expr);
+        if (auto apply = DynamicCast<Cangjie::CHIR::Apply*>(expr)) {
             CheckApplyOrInvoke<CHIR::Apply>(apply, state);
         }
-        if (expr->IsInvoke()) {
-            auto invoke = StaticCast<Cangjie::CHIR::Invoke*>(expr);
+        if (auto invoke = DynamicCast<Cangjie::CHIR::Invoke*>(expr)) {
             CheckApplyOrInvoke<CHIR::Invoke>(invoke, state);
         }
     };
-    const auto actionOnTerminator = [this](const CHIR::ConstDomain& state, CHIR::Terminator* expr,
+    const auto actionOnTerminator = [this](const CHIR::ConstDomain& state, CHIR::Expression* expr,
                                         std::optional<CHIR::Block*>) {
-        if (expr->IsApplyWithException()) {
-            auto applyWithExcept = StaticCast<Cangjie::CHIR::ApplyWithException*>(expr);
-            CheckApplyOrInvoke<CHIR::ApplyWithException>(applyWithExcept, state);
+        if (auto tryApply = DynamicCast<Cangjie::CHIR::TryApply*>(expr)) {
+            CheckApplyOrInvoke<CHIR::TryApply>(tryApply, state);
         }
     };
     auto funcs = package.GetGlobalFuncsWithBody(false);
