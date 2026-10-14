@@ -317,6 +317,9 @@ public class TransObject {
     private func buildPropertyVarDeclare(): Tokens {
         let varDeclare = Tokens()
         for (arkProp in arkProperties) {
+            if (!arkProp.comment.isEmpty()) {
+                varDeclare.append(addComment(arkProp.comment))
+            }
             let prefix = if (arkProp.isReadOnly()) {
                 Token(TokenKind.IDENTIFIER, "let")
             } else {
@@ -517,7 +520,9 @@ public class TransObject {
                 return
             }
         }
-        propertyDeclare.append(Token(TokenKind.COMMENT, arkProp.comment))
+        if (!arkProp.comment.isEmpty()) {
+            propertyDeclare.append(addComment(arkProp.comment))
+        }
         let propName = Token(TokenKind.IDENTIFIER, arkProp.propKey)
         let propType = arkProp.typeNode.toCJTypeTokens()
         let propAccess = if (arkProp.isStatic()) {

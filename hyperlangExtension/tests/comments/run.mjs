@@ -164,6 +164,21 @@ async function check(output, inputs) {
     pass: new RegExp(`\\b${name}\\b`).test(code) });
   if (inputText.includes('COMMENTED_EMPTY')) assertions.push({ assertion: 'NO_INITIALIZER_REMAINS_COMMENTED',
     pass: !code.includes('COMMENTED_EMPTY') });
+  if (inputs.some(path => path.endsWith('/property.d.ts'))) {
+    for (const marker of markers) {
+      const count = sources.reduce((n, source) => n + [...source.text.matchAll(new RegExp(marker, 'g'))].length, 0);
+      assertions.push({ assertion: 'PROPERTY_DOC_ONCE', marker, count, pass: count === 1 });
+    }
+    for (const pattern of [
+      'public var required: String', 'public let immutable: Float64',
+      'public var optional: Option<Bool> = None', 'public let documented: Option<String> = None',
+      'public mut prop local: String', 'public prop localOptional: ?Bool',
+      'public static mut prop shared: String', 'public prop fixed: Float64',
+      'public mut prop mutable: ?String', 'public mut prop documented: Bool',
+      'class ChildFields <: PropertyFields', 'class ChildClass <: PropertyClass'
+    ]) assertions.push({ assertion: 'PROPERTY_DECLARATION_PRESERVED', pattern,
+      pass: code.replace(/\s+/g, '').includes(pattern.replace(/\s+/g, '')) });
+  }
   if (inputs.some(path => path.endsWith('/generic.d.ts'))) {
     const jsonPaths = (await files(output, '.json')).filter(path => path.endsWith('/generic.json'));
     assert.equal(jsonPaths.length, 1, 'GENERIC_JSON_PRODUCER_REACHED');
@@ -195,8 +210,8 @@ async function check(output, inputs) {
 // Always finish the ordinary control first. The explicit finite profile leaves
 // generated-CJ compilation NOT_RUN; the default still requires the real cjc.
 let targetFailures = 0;
-const selected = values.group ?? ['control', 'const', 'type', 'method', 'object', 'generic'];
-assert.ok(selected.every(name => ['control', 'const', 'type', 'method', 'object', 'generic'].includes(name)), 'KNOWN_GROUP');
+const selected = values.group ?? ['control', 'const', 'type', 'method', 'object', 'generic', 'property'];
+assert.ok(selected.every(name => ['control', 'const', 'type', 'method', 'object', 'generic', 'property'].includes(name)), 'KNOWN_GROUP');
 const groups = values.directory ? [selected.filter(name => name === 'control'), selected.filter(name => name !== 'control')].filter(group => group.length) :
   selected.map(name => [name]);
 for (const group of groups) {
