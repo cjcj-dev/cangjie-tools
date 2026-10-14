@@ -1,6 +1,5 @@
 #!/usr/bin/env zx
 // Run the installed public HLE entry, then compile its unmodified CJ output.
-import { $ } from 'zx';
 import assert from 'node:assert/strict';
 import { parseArgs } from 'node:util';
 import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
@@ -76,6 +75,16 @@ async function check(output, inputs) {
     }
     assertions.push({ assertion: 'INPUT_MARKER_REACHED_CJ', marker, count, pass: count > 0 });
   }
+  const code = sources.map(source => {
+    const mask = commentMap(source.text);
+    return [...source.text].map((c, index) => mask[index] ? ' ' : c).join('');
+  }).join('\n');
+  const required = inputText.includes('HLE_CONTROL_DOC') ? ['Plain', 'ORDINARY', 'echo', 'PlainObject', 'PlainEnum'] :
+    inputText.includes('COMMENTED_VALUE') ? ['COMMENTED_VALUE', 'CommentedType', 'DOCUMENTED_VALUE'] : [];
+  for (const name of required) assertions.push({ assertion: 'ORDINARY_DECLARATION_PRESERVED', name,
+    pass: new RegExp(`\\b${name}\\b`).test(code) });
+  if (inputText.includes('COMMENTED_EMPTY')) assertions.push({ assertion: 'NO_INITIALIZER_REMAINS_COMMENTED',
+    pass: !code.includes('COMMENTED_EMPTY') });
   await writeFile(join(output, 'assertions.json'), JSON.stringify(assertions, null, 2) + '\n');
   console.log(`TARGET_ASSERTIONS_EXECUTED=${assertions.length} files=${sources.length}`);
   assert.ok(assertions.every(result => result.pass), 'NOTE_REMAINS_COMMENT / INPUT_MARKER_REACHED_CJ');

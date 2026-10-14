@@ -6,3 +6,16 @@ export declare function documented(value: "*/HLE_NOTE_METHOD_SINCE/*"): "*/HLE_N
 export interface NoteMethods {
     method(value: "*/HLE_NOTE_OBJECT_METHOD/*"): void;
 }
+export declare function promised(value: "*/HLE_NOTE_PROMISE_METHOD/*"): Promise<string>;
+export declare function on(key: "*/HLE_NOTE_EVENT_ON/*", callback: (value: string) => void): void;
+export declare function off(key: "*/HLE_NOTE_EVENT_OFF/*", callback: (value: string) => void): void;
+export declare function unionReturn(): "*/HLE_NOTE_UNION_RETURN/*" | number;
+export declare class NoteClass {
+    constructor(value: "*/HLE_NOTE_CONSTRUCTOR/*");
+    static method(value: "*/HLE_NOTE_STATIC_METHOD/*"): void;
+    promised(value: "*/HLE_NOTE_MEMBER_PROMISE/*"): Promise<string>;
+}
+/** @deprecated ordinary disabled interface. */
+export interface DisabledNote {
+    value: "*/HLE_NOTE_DISABLED_INTERFACE/*";
+}

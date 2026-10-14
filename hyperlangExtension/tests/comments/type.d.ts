@@ -7,3 +7,4 @@ export type OptionalNote = "*/HLE_NOTE_TYPE_OPTIONAL/*" | null;
 export type AnyControl = any;
 export type UnknownControl = Date;
 export type GenericControl = ReadonlyArray<string>;
+export type GenericNote = <T extends "*/HLE_NOTE_GENERIC_FUNCTION/*">(value: T) => T;
