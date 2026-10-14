@@ -63,6 +63,66 @@ function commentMap(source) {
   }
   return mask;
 }
+// This fixed union has three intentional data/name occurrences as well as its
+// brief. Match complete lexical tokens and their production positions; no other
+// occurrence (including one in an arbitrary string) is exempted.
+function unionOccurrences(source) {
+  const marker = 'HLE_NOTE_UNION_RETURN';
+  const identifier = 'LITERAL___HLE_NOTE_UNION_RETURN__';
+  const literal = '"*/HLE_NOTE_UNION_RETURN/*"';
+  const safeBrief = String.raw`@brief unionReturn(): "*\/HLE_NOTE_UNION_RETURN/\*" | number`;
+  const mask = commentMap(source.text);
+  const tokens = [];
+  for (let i = 0; i < source.text.length;) {
+    if (mask[i] || /\s/.test(source.text[i])) { i++; continue; }
+    const start = i;
+    let kind = 'punctuation';
+    if (source.text[i] === '"' || source.text[i] === "'") {
+      kind = 'string';
+      const quote = source.text[i++];
+      while (i < source.text.length) {
+        if (source.text[i] === '\\') { i += 2; continue; }
+        if (source.text[i++] === quote) break;
+      }
+    } else if (/[A-Za-z_]/.test(source.text[i])) {
+      kind = 'identifier';
+      while (i < source.text.length && /[A-Za-z_0-9]/.test(source.text[i])) i++;
+    } else i++;
+    tokens.push({ start, end: i, kind, text: source.text.slice(start, i) });
+  }
+  const sequence = (index, expected) => expected.every((text, n) => tokens[index + n]?.text === text);
+  const enumName = 'AutoGenType0Inmethod';
+  const declaration = tokens.findIndex((_, i) => sequence(i, ['public', 'enum', enumName, '{', '|', identifier, '|', 'NUMBER', '(', 'Float64', ')']));
+  const method = tokens.findIndex((_, i) => sequence(i, ['public', 'func', 'toJSValue', '(', 'context', ':', 'JSContext', ')', ':', 'JSValue', '{', 'match', '(', 'this', ')', '{', 'case', identifier, '=', '>', 'context', '.', 'string', '(', literal, ')', '.', 'toJSValue', '(', ')']));
+  const result = [];
+  for (const match of source.text.matchAll(new RegExp(marker, 'g'))) {
+    const offset = match.index;
+    const tokenIndex = tokens.findIndex(t => t.start <= offset && offset < t.end);
+    const token = tokens[tokenIndex];
+    let role = 'unexpected', pass = false;
+    const lineStart = source.text.lastIndexOf('\n', offset) + 1;
+    const lineEnd = source.text.indexOf('\n', offset);
+    const line = source.text.slice(lineStart, lineEnd);
+    if (/^\s*\* @brief unionReturn\(\): /.test(line)) {
+      role = 'comment';
+      pass = Boolean(mask[offset]) && line.trim() === `* ${safeBrief}` &&
+        /^\n\s*\*\/\s*public func unionReturn\(\): AutoGenType0Inmethod \{/.test(source.text.slice(lineEnd));
+    } else if (token?.kind === 'identifier' && token.text === identifier) {
+      if (declaration >= 0 && tokenIndex === declaration + 5) {
+        role = 'enum-declaration'; pass = true;
+      } else if (method >= 0 && tokenIndex === method + 17 && declaration >= 0 &&
+        method === declaration + 11) {
+        role = 'enum-case'; pass = true;
+      }
+    } else if (token?.kind === 'string' && token.text === literal && method >= 0 &&
+      tokenIndex === method + 24 && declaration >= 0 && method === declaration + 11) {
+      role = 'context-string'; pass = true;
+    }
+    result.push({ assertion: role === 'comment' ? 'UNION_COMMENT_SAFE' : 'UNION_LEGAL_POSITION',
+      marker, file: source.path, offset, role, lexicalKind: mask[offset] ? 'comment' : token?.kind, pass });
+  }
+  return result;
+}
 async function check(output, inputs) {
   const sources = await Promise.all((await files(output, '.cj')).map(async path => ({ path, text: await readFile(path, 'utf8') })));
   assert.ok(sources.length > 0, 'CJ_GENERATION_REACHED');
@@ -70,6 +130,19 @@ async function check(output, inputs) {
   const markers = [...new Set(inputText.match(/HLE_(?:NOTE|CONTROL)_\w+/g) ?? [])];
   const assertions = [];
   for (const marker of markers) {
+    if (marker === 'HLE_NOTE_UNION_RETURN') {
+      const occurrences = sources.flatMap(unionOccurrences);
+      assertions.push(...occurrences);
+      for (const role of ['comment', 'enum-declaration', 'enum-case', 'context-string']) {
+        const count = occurrences.filter(item => item.role === role).length;
+        assertions.push({ assertion: 'UNION_EXACT_ROLE_COUNT', marker, role, count, pass: count === 1 });
+      }
+      assertions.push({ assertion: 'UNION_NO_EXTRA_OCCURRENCES', marker, count: occurrences.length,
+        pass: occurrences.length === 4 && occurrences.every(item => item.role !== 'unexpected') });
+      assertions.push({ assertion: 'INPUT_MARKER_REACHED_CJ', marker, count: occurrences.length,
+        pass: occurrences.length > 0 });
+      continue;
+    }
     let count = 0;
     for (const source of sources) {
       const mask = commentMap(source.text);
