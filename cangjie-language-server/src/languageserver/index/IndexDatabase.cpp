@@ -166,8 +166,9 @@ dberr_no PopulateSymbolWithRank(const sqldb::Result &row, Symbol &sym)
         sym.returnType, sym.type, sym.flags, sym.isCjoSym, sym.isMemberParam, sym.modifier, sym.isDeprecated,
         sym.syscap, sym.pkgModifier, sym.curModule, sym.curMacroCall.fileUri, sym.curMacroCall.begin.line,
         sym.curMacroCall.begin.column, sym.curMacroCall.end.line, sym.curMacroCall.end.column, sym.rank);
-        sym.id = GetIDFromArray(idArray);
-    return true;
+    sym.id = GetIDFromArray(idArray);
+    sym.idArray = idArray;
+    return 0;
 }
 // LCOV_EXCL_STOP
 void PopulateComment(const sqldb::Result &row, Comment &comment)
@@ -710,26 +711,29 @@ dberr_no IndexDatabase::GetMatchingSymbols(
         patternStream << '"' << token << '"' << '*' << ' ';
     });
     std::string pattern = patternStream.str();
+    dberr_no error = 0;
 #ifndef NO_EXCEPTIONS
     try {
 #endif
         Use (sql::SelectMatchingSymbols).execute(sqldb::with(pattern, flags, scope), [&](sqldb::Result row) {
             Symbol resSym;
-            if (PopulateSymbolWithRank(row, resSym)) {
-                return true;
+            error = PopulateSymbolWithRank(row, resSym);
+            if (error != 0) {
+                return RESULT_DONE;
             }
-            if (PopulateReferenceCount(resSym)) {
-                return true;
+            error = PopulateReferenceCount(resSym);
+            if (error != 0) {
+                return RESULT_DONE;
             }
             return callback(resSym) ? RESULT_NEXT : RESULT_DONE;
         });
 #ifndef NO_EXCEPTIONS
     } catch (std::exception &ex) {
         std::cerr << "GetMatchingSymbols fail due to " << ex.what() << "\n";
-        return true;
+        return 1;
     }
 #endif
-    return true;
+    return error;
 }
 // LCOV_EXCL_STOP
 dberr_no IndexDatabase::GetReferences(const SymbolID &id, RefKind kind,
@@ -1868,7 +1872,7 @@ dberr_no IndexDatabase::PopulateReferenceCount(Symbol &sym)
         return 1;
     }
 #endif
-    return true;
+    return 0;
 }
 
 sqldb::Statement &IndexDatabase::UseSelectConfig()
