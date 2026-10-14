@@ -6,7 +6,10 @@ import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const { values } = parseArgs({ options: {
+const scriptIndex = process.argv.findIndex((argument, index) => index > 0 &&
+  resolve(argument) === fileURLToPath(import.meta.url));
+assert.ok(scriptIndex > 0, 'HARNESS_ARGUMENT_ENTRY');
+const { values } = parseArgs({ args: process.argv.slice(scriptIndex + 1), options: {
   hle: { type: 'string' }, cjc: { type: 'string' }, out: { type: 'string' },
   'install-dir': { type: 'string' }, analysis: { type: 'string' },
   typescript: { type: 'string' }, 'import-path': { type: 'string', multiple: true },
