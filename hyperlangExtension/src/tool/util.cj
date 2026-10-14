@@ -24,11 +24,11 @@ public func escapeRawComment(comment: String): String {
 }
 
 public func addComment(msg: String, reason!: ?String = None): Tokens {
-    let safeMsg = escapeComment(msg)
+    let safeMsg = escapeRawComment(msg)
     if (let Some(r) <- reason) {
-        Tokens([Token(TokenKind.COMMENT, "// ${escapeComment(r)}"), nl, Token(TokenKind.COMMENT, "/*${safeMsg}*/"), nl])
+        Tokens([Token(TokenKind.COMMENT, "// ${escapeComment(r)}"), nl, Token(TokenKind.COMMENT, safeMsg), nl])
     } else {
-        Tokens([Token(TokenKind.COMMENT, "/*${safeMsg}*/"), nl])
+        Tokens([Token(TokenKind.COMMENT, safeMsg), nl])
     }
 }
 
