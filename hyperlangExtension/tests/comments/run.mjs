@@ -15,6 +15,7 @@ const { values } = parseArgs({ args: process.argv.slice(scriptIndex + 1), option
   typescript: { type: 'string' }, 'import-path': { type: 'string', multiple: true },
   explicit: { type: 'boolean', default: false }, directory: { type: 'boolean', default: false },
   'generation-only': { type: 'boolean', default: false },
+  group: { type: 'string', multiple: true },
   'collect-red': { type: 'boolean', default: false }
 }});
 for (const key of ['hle', 'cjc', 'out', 'install-dir']) assert.ok(values[key], `missing --${key}`);
@@ -90,6 +91,30 @@ async function check(output, inputs) {
     pass: new RegExp(`\\b${name}\\b`).test(code) });
   if (inputText.includes('COMMENTED_EMPTY')) assertions.push({ assertion: 'NO_INITIALIZER_REMAINS_COMMENTED',
     pass: !code.includes('COMMENTED_EMPTY') });
+  if (inputs.some(path => path.endsWith('/generic.d.ts'))) {
+    const jsonPaths = (await files(output, '.json')).filter(path => path.endsWith('/generic.json'));
+    assert.equal(jsonPaths.length, 1, 'GENERIC_JSON_PRODUCER_REACHED');
+    const parsed = JSON.parse(await readFile(jsonPaths[0], 'utf8'));
+    const types = parsed.type.map(entry => entry.info);
+    const expected = {
+      Own: ['()', '(function ((T (StringLiteral "*/HLE_NOTE_OWN/*"))) (ref T) (parameter value (ref T)))', 'Own'],
+      Alias: ['((T (StringLiteral "*/HLE_NOTE_ALIAS/*")))', '(function () (ref T) (parameter value (ref T)))', 'Alias<T>'],
+      Both: ['((T (StringLiteral "*/HLE_NOTE_OUTER/*")))', '(function ((U (StringLiteral "*/HLE_NOTE_INNER/*"))) (ref U) (parameter outer (ref T)) (parameter inner (ref U)))', 'Both<T>'],
+      Shadow: ['((T (StringLiteral "*/HLE_NOTE_SHADOW_OUTER/*")))', '(function ((T (StringLiteral "*/HLE_NOTE_SHADOW_INNER/*"))) (ref T) (parameter value (ref T)))', 'Shadow<T>'],
+      Dependent: ['((T (StringLiteral "*/HLE_NOTE_DEPENDENT/*")))', '(function ((U (ref T))) (ref T) (parameter value (ref U)))', 'Dependent<T>'],
+      Parenthesized: ['((T (StringLiteral "*/HLE_NOTE_PAREN_OUTER/*")))', '(function ((U (StringLiteral "*/HLE_NOTE_PAREN_INNER/*"))) (ref T) (parameter value (ref U)))', 'Parenthesized<T>'],
+      Nested: ['()', '(function () (function ((T (StringLiteral "*/HLE_NOTE_NESTED/*"))) (ref T) (parameter value (ref T))))', 'Nested'],
+      PlainFunction: ['()', '(function () (string) (parameter value (number)))', 'PlainFunction']
+    };
+    for (const [name, [alias, fn, declaration]] of Object.entries(expected)) {
+      const info = types.find(info => info.name === name);
+      assertions.push({ assertion: 'ALIAS_SCOPE_SERIALIZED', name, actual: info?.typeParameters, pass: info?.typeParameters === alias });
+      assertions.push({ assertion: 'FUNCTION_SCOPE_SERIALIZED', name, actual: info?.typeNode, pass: info?.typeNode === fn });
+      const match = code.match(new RegExp(`public\\s+type\\s+(${name}(?:\\s*<[^>]*>)?)\\s*=`));
+      assertions.push({ assertion: 'ALIAS_SCOPE_CONSUMED', name, actual: match?.[1],
+        pass: match?.[1].replace(/\s/g, '') === declaration });
+    }
+  }
   await writeFile(join(output, 'assertions.json'), JSON.stringify(assertions, null, 2) + '\n');
   console.log(`TARGET_ASSERTIONS_EXECUTED=${assertions.length} files=${sources.length}`);
   assert.ok(assertions.every(result => result.pass), 'NOTE_REMAINS_COMMENT / INPUT_MARKER_REACHED_CJ');
@@ -97,8 +122,10 @@ async function check(output, inputs) {
 // Always finish the ordinary control first. The explicit finite profile leaves
 // generated-CJ compilation NOT_RUN; the default still requires the real cjc.
 let targetFailures = 0;
-const groups = values.directory ? [['control'], ['const', 'type', 'method', 'object']] :
-  [['control'], ['const'], ['type'], ['method'], ['object']];
+const selected = values.group ?? ['control', 'const', 'type', 'method', 'object', 'generic'];
+assert.ok(selected.every(name => ['control', 'const', 'type', 'method', 'object', 'generic'].includes(name)), 'KNOWN_GROUP');
+const groups = values.directory ? [selected.filter(name => name === 'control'), selected.filter(name => name !== 'control')].filter(group => group.length) :
+  selected.map(name => [name]);
 for (const group of groups) {
   const name = group.join('-'), output = join(out, name);
   await mkdir(output, { recursive: true });

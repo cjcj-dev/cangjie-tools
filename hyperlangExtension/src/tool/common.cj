@@ -355,6 +355,7 @@ public class TypeType <: Serializable<TypeType> {
     public var comment: String = ""
     public var aliasType: String = ""
     public var tsType: TsType = TsAny
+    public var typeParameters: Array<TsGeneric> = []
     public var gconfig: Option<GlobalConfig> = None
 
     public init() {}
@@ -372,6 +373,12 @@ public class TypeType <: Serializable<TypeType> {
 
     public func generate(): Tokens {
         let tok = Tokens()
+        if (!typeParameters.isEmpty()) {
+            // Keep alias constraints separate from the function's own parameters.
+            // Generic constraints still require manual translation in generated CJ.
+            let parameters = typeParameters.map {it => it.toString()} |> collectString<String>(delimiter: ", ")
+            tok.append(addComment("FIXME: type alias parameters <${parameters}>"))
+        }
         match (tsType) {
             case TsUnion(arr) =>
                 // filt option type
@@ -415,13 +422,15 @@ public class TypeType <: Serializable<TypeType> {
         }
         var typeName: String = String.deserialize(dms2.get("name"))
         let tsType: TsType = TsType.fromSExp(String.deserialize(dms2.get("typeNode")))
+        var aliasParameters: Array<TsGeneric> = []
         match (tsType) {
-            case TsFunction(_, _, arrayTsGeneric)=> 
-                if (arrayTsGeneric.size != 0) {
+            case TsFunction(_, _, _) =>
+                aliasParameters = TypeParser(String.deserialize(dms2.get("typeParameters"))).parseGenerics()
+                if (aliasParameters.size != 0) {
                     typeName = typeName + "< "
-                    for (i in 0..arrayTsGeneric.size) {
-                        typeName = typeName + arrayTsGeneric[i].name
-                        if (i != arrayTsGeneric.size - 1) {
+                    for (i in 0..aliasParameters.size) {
+                        typeName = typeName + aliasParameters[i].name
+                        if (i != aliasParameters.size - 1) {
                             typeName = typeName + ", "
                         }
                     }
@@ -431,6 +440,7 @@ public class TypeType <: Serializable<TypeType> {
         }
         let result = TypeType(typeName, String.deserialize(dms2.get("comment")),
             String.deserialize(dms2.get("type")), tsType)
+        result.typeParameters = aliasParameters
         addUserDefinedName(result.name)
         return result
     }
