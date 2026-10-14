@@ -164,8 +164,11 @@ async function check(output, inputs) {
     pass: new RegExp(`\\b${name}\\b`).test(code) });
   if (inputText.includes('COMMENTED_EMPTY')) assertions.push({ assertion: 'NO_INITIALIZER_REMAINS_COMMENTED',
     pass: !code.includes('COMMENTED_EMPTY') });
-  if (inputs.some(path => path.endsWith('/property.d.ts'))) {
-    for (const marker of markers) {
+  const propertyInputs = inputs.filter(path => path.endsWith('/property.d.ts'));
+  if (propertyInputs.length) {
+    const propertyText = (await Promise.all(propertyInputs.map(path => readFile(path, 'utf8')))).join('\n');
+    const propertyMarkers = [...new Set(propertyText.match(/HLE_(?:NOTE|CONTROL)_\w+/g) ?? [])];
+    for (const marker of propertyMarkers) {
       const count = sources.reduce((n, source) => n + [...source.text.matchAll(new RegExp(marker, 'g'))].length, 0);
       assertions.push({ assertion: 'PROPERTY_DOC_ONCE', marker, count, pass: count === 1 });
     }
