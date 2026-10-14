@@ -5,7 +5,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const [sdkArg, workspaceArg, evidenceArg, mode = 'default', storage = 'memory'] = process.argv.slice(2);
+const [sdkArg, workspaceArg, evidenceArg, mode = 'default', storage = 'memory', logging = 'off'] = process.argv.slice(2);
 if (!sdkArg || !workspaceArg || !evidenceArg) throw new Error('usage: source-control.mjs SDK WORKSPACE EVIDENCE [default|explicit] [memory|database]');
 const sdk = resolve(sdkArg), workspace = resolve(workspaceArg), evidence = resolve(evidenceArg);
 await mkdir(evidence, { recursive: true });
@@ -17,6 +17,7 @@ const env = {
 };
 await mkdir(env.HOME, { recursive: true });
 const args = storage === 'database' ? [`--cache-path=${workspace}`] : [];
+if (logging === 'log') args.push('--enable-log=true', `--log-path=${evidence}`);
 const child = spawn(join(sdk, 'tools/bin/LSPServer'), args, { cwd: workspace, env });
 const messages = [], pending = new Map();
 let input = Buffer.alloc(0), stderr = '', nextId = 1, protocolError;
@@ -62,6 +63,7 @@ const result = { sdk, workspace, mode, storage, executable: join(sdk, 'tools/bin
 let harnessRc = 2;
 try {
   const options = mode === 'explicit' ? { modulesHomeOption: sdk } : {};
+  options.multiModuleOption = { [pathToFileURL(workspace).href]: { name: 'probe' } };
   result.initialize = await request('initialize', { processId: process.pid, rootUri: pathToFileURL(workspace).href, capabilities: { textDocument: {} }, initializationOptions: options });
   await writeFile(join(evidence, 'process.maps'), await readFile(`/proc/${child.pid}/maps`));
   send({ jsonrpc: '2.0', method: 'initialized', params: {} });
@@ -69,7 +71,7 @@ try {
   const uri = pathToFileURL(sourceFile).href;
   const contents = await readFile(sourceFile, 'utf8');
   send({ jsonrpc: '2.0', method: 'textDocument/didOpen', params: {
-    textDocument: { uri, languageId: 'cangjie', version: 1, text: contents },
+    textDocument: { uri, languageId: 'Cangjie', version: 1, text: contents },
   } });
   result.symbols = await request('textDocument/documentSymbol', { textDocument: { uri } });
   result.assertionExecuted = true;
