@@ -39,6 +39,8 @@ int main(int argc, char **argv)
         second.name = "ProtocolBeta";
         second.signature = second.name;
         db.Update([&](IndexDatabase::DBUpdate update) {
+            std::vector<std::string> fileInfo{first.location.fileUri, "protocol", "", "fixture"};
+            update.InsertFileWithId(1, fileInfo);
             update.InsertSymbol(first);
             update.InsertSymbol(second);
             return update.Done();
@@ -89,7 +91,7 @@ int main(int argc, char **argv)
         Require(status == 0 && rows == 2, "statement reusable after error");
         // Break only this disposable database's reference-count query.
         auto connection = sqldb::open(argv[1], sqldb::OpenReadWrite);
-        connection.execute("DROP TABLE refs");
+        connection.execute("DROP VIEW refs");
         rows = 0;
         status = db.GetMatchingSymbols("Protocol", [&](const Symbol &) { ++rows; return RESULT_NEXT; });
         Require(status != 0 && rows == 0, "reference SQL error stops without delivering incomplete rows");
