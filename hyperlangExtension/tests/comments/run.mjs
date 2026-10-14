@@ -10,7 +10,9 @@ const { values } = parseArgs({ options: {
   hle: { type: 'string' }, cjc: { type: 'string' }, out: { type: 'string' },
   'install-dir': { type: 'string' }, analysis: { type: 'string' },
   typescript: { type: 'string' }, 'import-path': { type: 'string', multiple: true },
-  explicit: { type: 'boolean', default: false }, directory: { type: 'boolean', default: false }
+  explicit: { type: 'boolean', default: false }, directory: { type: 'boolean', default: false },
+  'generation-only': { type: 'boolean', default: false },
+  'collect-red': { type: 'boolean', default: false }
 }});
 for (const key of ['hle', 'cjc', 'out', 'install-dir']) assert.ok(values[key], `missing --${key}`);
 if (values.explicit) for (const key of ['analysis', 'typescript']) assert.ok(values[key], `missing --${key}`);
@@ -89,7 +91,9 @@ async function check(output, inputs) {
   console.log(`TARGET_ASSERTIONS_EXECUTED=${assertions.length} files=${sources.length}`);
   assert.ok(assertions.every(result => result.pass), 'NOTE_REMAINS_COMMENT / INPUT_MARKER_REACHED_CJ');
 }
-// Always finish the ordinary control first, including a real compiler invocation.
+// Always finish the ordinary control first. The explicit finite profile leaves
+// generated-CJ compilation NOT_RUN; the default still requires the real cjc.
+let targetFailures = 0;
 const groups = values.directory ? [['control'], ['const', 'type', 'method', 'object']] :
   [['control'], ['const'], ['type'], ['method'], ['object']];
 for (const group of groups) {
@@ -107,11 +111,27 @@ for (const group of groups) {
   if (values.explicit) args.push('-j', resolve(values.analysis), '-r', resolve(values.typescript));
   assert.equal(await command(`${name}-hle`, args), 0, 'PUBLIC_HLE_RC');
   assert.ok((await files(output, '.json')).length > 0, 'JS_JSON_PRODUCER_REACHED');
-  await check(output, inputPaths);
+  try {
+    await check(output, inputPaths);
+  } catch (error) {
+    if (!values['collect-red'] || group[0] === 'control' ||
+      !(error instanceof assert.AssertionError) ||
+      error.message !== 'NOTE_REMAINS_COMMENT / INPUT_MARKER_REACHED_CJ') throw error;
+    targetFailures++;
+    console.log(`EXPECTED_TARGET_RED=${name}`);
+  }
+  if (values['generation-only']) {
+    console.log(`GENERATED_CJ_COMPILE=NOT_RUN group=${name}`);
+    continue;
+  }
   const build = join(out, `${name}-compiled`);
   await mkdir(build);
   const imports = (values['import-path'] ?? []).flatMap(path => ['--import-path', resolve(path)]);
   assert.equal(await command(`${name}-cjc`, [resolve(values.cjc), '-p', output, '--output-type=staticlib',
     '--output-dir', build, '-o', 'libhle_comments.a', ...imports]), 0, 'GENERATED_CJ_COMPILER_RC');
 }
-console.log('PUBLIC_HLE_GENERATION_AND_REAL_CJ_COMPILE_PASS');
+if (targetFailures) {
+  console.log(`TARGET_FAILURE_GROUPS=${targetFailures}`);
+  process.exitCode = 1;
+} else console.log(values['generation-only'] ? 'PUBLIC_HLE_GENERATION_SEMANTICS_PASS COMPILE=NOT_RUN' :
+  'PUBLIC_HLE_GENERATION_AND_REAL_CJ_COMPILE_PASS');
