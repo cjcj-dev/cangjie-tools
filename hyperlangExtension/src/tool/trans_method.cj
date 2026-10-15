@@ -534,6 +534,7 @@ public class TransMethod {
         } else {
             apiCallParameters[0].name = "keyString"
         }
+        apiCallParameters[0].ty = TsString
         let apiCallParamsToJS = (parametersToJS(quote(ctx), parameters: apiCallParameters) |> 
         reduce {l: Tokens, r: Tokens => l + commaToken + r}).getOrDefault { => quote() }
 

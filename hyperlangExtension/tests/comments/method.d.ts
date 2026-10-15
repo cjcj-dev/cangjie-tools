@@ -14,6 +14,10 @@ export declare class NoteClass {
     constructor(value: "*/HLE_NOTE_CONSTRUCTOR/*");
     static method(value: "*/HLE_NOTE_STATIC_METHOD/*"): void;
     promised(value: "*/HLE_NOTE_MEMBER_PROMISE/*"): Promise<string>;
+    on(event: "*/HLE_NOTE_MEMBER_ON/*", callback: (value: string) => void): void;
+    off(event: "*/HLE_NOTE_MEMBER_OFF/*", callback?: (value: string) => void): void;
+    static on(event: "*/HLE_NOTE_STATIC_ON/*", callback: (value: string) => void): void;
+    static off(event: "*/HLE_NOTE_STATIC_OFF/*", callback?: (value: string) => void): void;
 }
 /** @deprecated ordinary disabled interface. */
 export interface DisabledNote {
