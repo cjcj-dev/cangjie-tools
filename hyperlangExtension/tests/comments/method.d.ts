@@ -16,6 +16,8 @@ export declare class NoteClass {
     promised(value: "*/HLE_NOTE_MEMBER_PROMISE/*"): Promise<string>;
     on(event: "*/HLE_NOTE_MEMBER_ON/*", callback: (value: string) => void): void;
     off(event: "*/HLE_NOTE_MEMBER_OFF/*", callback?: (value: string) => void): void;
+}
+export declare class StaticEvents {
     static on(event: "*/HLE_NOTE_STATIC_ON/*", callback: (value: string) => void): void;
     static off(event: "*/HLE_NOTE_STATIC_OFF/*", callback?: (value: string) => void): void;
 }
