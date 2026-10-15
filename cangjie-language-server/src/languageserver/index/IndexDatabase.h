@@ -90,6 +90,8 @@ public:
     dberr_no GetHeaderFileRelations(std::string fileURI,
                                     std::function<bool(std::string)> callback);
 
+    // Zero means success (including no matches or callback-requested stop).
+    // A nonzero error stops iteration; callback true continues, false stops.
     dberr_no GetMatchingSymbols(std::string query,
                                 std::function<bool(const Symbol &sym)> callback,
                                 std::optional<std::string> scope = std::nullopt,
