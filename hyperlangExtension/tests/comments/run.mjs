@@ -174,7 +174,8 @@ async function check(output, inputs) {
     }
     for (const pattern of [
       'public var required: String', 'public let immutable: Float64',
-      'public var optional: Option<Bool> = None', 'public let documented: Option<String> = None',
+      'public var optional: Option<Bool> = None', 'public let documented: Option<String> protected',
+      'documented!: Option<String> = None', 'this.documented = documented',
       'public mut prop local: String', 'public prop localOptional: ?Bool',
       'public static mut prop shared: String', 'public prop fixed: Float64',
       'public mut prop mutable: ?String', 'public mut prop documented: Bool',
