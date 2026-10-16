@@ -7,16 +7,22 @@
 #ifndef CJFMT_COMMENTHANDLER_H
 #define CJFMT_COMMENTHANDLER_H
 
+#include "Format/Doc.h"
 #include "cangjie/Lex/Token.h"
 #include "cangjie/Basic/SourceManager.h"
 
 #include <string>
+#include <optional>
+#include <utility>
 #include <vector>
 
 namespace Cangjie::Format {
 
+std::string FormatCommentToken(const Cangjie::Token &token, int indent);
+
 std::string InsertComments(const std::vector<Cangjie::Token> &originalTokens,
-    const std::vector<Cangjie::Token> &formattedTokens, Cangjie::SourceManager &sm);
+    const std::vector<Cangjie::Token> &formattedTokens, Cangjie::SourceManager &sm,
+    const FormattingOptions &options, std::optional<std::pair<int, int>> selectedLines = std::nullopt);
 
 } // namespace Cangjie::Format
 

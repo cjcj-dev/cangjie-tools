@@ -342,6 +342,9 @@ public:
         } else {
             // couldn't find any ast nodes to format, should report this to user?
             result = rawCode;
+            if (!regionToFormat.isWholeFile) {
+                FormatSelectedCommentsInText(inputTokens, result);
+            }
         }
 
         if (result.back() != '\n') {
@@ -417,6 +420,11 @@ private:
         auto formattedEnd = tracker.actuallyFormattedEnd.value();
         auto originalFragmentTokens = GetTokensBetweenPositions(originalFileAllTokens, formattedBegin, formattedEnd);
         auto formattedFragmentTokens = formattedTextTokens;
+        if (originalFragmentTokens.empty() || formattedFragmentTokens.empty()) {
+            auto result = rawCode;
+            FormatSelectedCommentsInText(originalFileAllTokens, result);
+            return result;
+        }
         auto preciseFragmentBounds = tracker.GetPreciseFragmentBounds(sm);
         if (preciseFragmentBounds.has_value()) {
             auto smallerFragments = ExtractTokensBetweenPositions(originalFragmentTokens, formattedFragmentTokens,
@@ -426,11 +434,20 @@ private:
             }
         }
 
-        auto fragmentText = InsertComments(originalFragmentTokens, formattedFragmentTokens, sm);
+        auto fragmentText = InsertComments(originalFragmentTokens, formattedFragmentTokens, sm, options,
+            std::make_pair(regionToFormat.startLine, regionToFormat.endLine));
         auto contentBefore =
             sm.GetContentBetween(originalFileAllTokens.front().Begin(), originalFragmentTokens.front().Begin());
         auto contentAfter =
             sm.GetContentBetween(originalFragmentTokens.back().End(), originalFileAllTokens.back().End());
+
+        // These pieces still have their original source positions. Comments inside
+        // fragmentText have already been handled by InsertComments.
+        const auto &source = sm.GetSource(originalFileAllTokens.front().Begin().fileID);
+        FormatSelectedCommentsInText(originalFileAllTokens, contentBefore,
+            source.PosToOffset(originalFileAllTokens.front().Begin()));
+        FormatSelectedCommentsInText(originalFileAllTokens, contentAfter,
+            source.PosToOffset(originalFragmentTokens.back().End()));
 
         (void)contentBefore.erase(contentBefore.find_last_not_of(" \t") + 1);
 
@@ -453,15 +470,48 @@ private:
         return contentBefore + fragmentText + contentAfter;
     }
 
+    void FormatSelectedCommentsInText(
+        const std::vector<Token> &inputTokens, std::string &text, size_t sourceOffset = 0)
+    {
+        const auto sourceEnd = sourceOffset + text.size();
+        // Only pass unchanged source slices here. Applying edits from right to left
+        // keeps every remaining token's original byte offset valid.
+        for (auto it = inputTokens.rbegin(); it != inputTokens.rend(); ++it) {
+            const auto &token = *it;
+            if (token.kind != TokenKind::COMMENT || token.Value().find("\n") == std::string::npos) {
+                continue;
+            }
+            auto commentEndLine = token.Begin().line +
+                static_cast<int>(std::count(token.Value().begin(), token.Value().end(), '\n'));
+            if (token.Begin().line > regionToFormat.endLine || commentEndLine < regionToFormat.startLine) {
+                continue;
+            }
+            const auto begin = sm.GetSource(token.Begin().fileID).PosToOffset(token.Begin());
+            if (begin < sourceOffset || begin > sourceEnd || token.Value().size() > sourceEnd - begin) {
+                continue;
+            }
+            const auto indent = token.Begin().column - 1;
+            auto replacement = FormatCommentToken(token, indent);
+            // Preserve the first line's existing prefix, whether indentation or code.
+            replacement.erase(0, static_cast<size_t>(indent));
+            text.replace(begin - sourceOffset, token.Value().size(), replacement);
+        }
+    }
+
     std::string ConstructResultingText(OwnedPtr<File>&, const std::vector<Token>& inputTokens, std::string& formatted)
     {
         (void)formatted.erase(0, formatted.find_first_not_of(" \t\n"));
         (void)formatted.erase(formatted.find_last_not_of(" \t\n") + 1);
         auto formattedTokens = RunLexer(formatted, "___formattedSnippet.cj");
         if (!regionToFormat.isWholeFile) {
+            if (!tracker.actuallyFormattedStart.has_value() || !tracker.actuallyFormattedEnd.has_value()) {
+                auto result = rawCode;
+                FormatSelectedCommentsInText(inputTokens, result);
+                return result;
+            }
             return ConstructTextForCodeFragment(inputTokens, formattedTokens);
         } else {
-            return InsertComments(inputTokens, formattedTokens, sm);
+            return InsertComments(inputTokens, formattedTokens, sm, options);
         }
     }
 
