@@ -468,7 +468,8 @@ class ASTVisitor {
 
             rjson[rjson.length - 1].info.name = declaration.name.escapedText;
             if (!declaration.initializer || !declaration.initializer.getText()) {
-                rjson[rjson.length - 1].info.comment = '/*\n' + comment;
+                const safeComment = comment.replace(/\*\//g, '*\\/').replace(/\/\*/g, '/\\*');
+                rjson[rjson.length - 1].info.comment = '/*\n' + safeComment;
                 rjson[rjson.length - 1].info.value = fixme + '\n*/';
             } else {
                 rjson[rjson.length - 1].info.comment = comment;
@@ -489,6 +490,10 @@ class ASTVisitor {
 
         rjson[rjson.length - 1].info.name = node.name.escapedText;
         rjson[rjson.length - 1].info.typeNode = this.serializeType(node.type);
+        // Alias parameters and call-signature parameters bind in different scopes.
+        rjson[rjson.length - 1].info.typeParameters = `(${node.typeParameters?.map(tp =>
+            this.generateGenericParameter(tp)
+        ).join(' ') ?? ''})`;
 
         if (node.type.kind === 150) {
             rjson[rjson.length - 1].info.type = 'number';
@@ -659,15 +664,9 @@ class ASTVisitor {
                 return this.serializeLiteralType(typeNode);
             case ts.SyntaxKind.FunctionType:
                 // (function (type-parameter-list) ret-type (parameter p-name p-type))           
-                let generics = typeNode.typeParameters?.map(tp =>
+                const generics = typeNode.typeParameters?.map(tp =>
                     this.generateGenericParameter(tp)
                 ).join(' ') ?? '';
-                // If this is a typealias, typeparameters are saved in parent decl
-                if (typeNode.parent !== undefined && typeNode.parent.kind === ts.SyntaxKind.TypeAliasDeclaration) {
-                    generics = typeNode.parent.typeParameters?.map(tp =>
-                        this.generateGenericParameter(tp)
-                    ).join(' ') ?? '';
-                }
 
                 return `(function (${generics}) ${this.serializeType(typeNode.type)}${typeNode.parameters.map(
                     p => ` (parameter ${p.name.escapedText} ${this.serializeType(p.type)}${p.questionToken ? ' optional' : ''})`

@@ -317,6 +317,9 @@ public class TransObject {
     private func buildPropertyVarDeclare(): Tokens {
         let varDeclare = Tokens()
         for (arkProp in arkProperties) {
+            if (!arkProp.comment.isEmpty()) {
+                varDeclare.append(addComment(arkProp.comment))
+            }
             let prefix = if (arkProp.isReadOnly()) {
                 Token(TokenKind.IDENTIFIER, "let")
             } else {
@@ -329,7 +332,11 @@ public class TransObject {
                 } else {
                     (Tokens(Token(TokenKind.IDENTIFIER, "Option<${arkProp.typeNode.toCJTypeTokens()}>")), noneToken)
                 }
-                varDeclare.append(quote(public $(prefix) $(proName): $(typeToken) = $(defToken)))
+                if (arkProp.isReadOnly()) {
+                    varDeclare.append(quote(public $(prefix) $(proName): $(typeToken)))
+                } else {
+                    varDeclare.append(quote(public $(prefix) $(proName): $(typeToken) = $(defToken)))
+                }
             } else {
                 let proName = Token(TokenKind.IDENTIFIER, arkProp.cjKey)
                 varDeclare.append(quote(public $(prefix) $(proName): $(arkProp.typeNode.toCJTypeTokens())))
@@ -517,7 +524,9 @@ public class TransObject {
                 return
             }
         }
-        propertyDeclare.append(Token(TokenKind.COMMENT, arkProp.comment))
+        if (!arkProp.comment.isEmpty()) {
+            propertyDeclare.append(addComment(arkProp.comment))
+        }
         let propName = Token(TokenKind.IDENTIFIER, arkProp.propKey)
         let propType = arkProp.typeNode.toCJTypeTokens()
         let propAccess = if (arkProp.isStatic()) {
