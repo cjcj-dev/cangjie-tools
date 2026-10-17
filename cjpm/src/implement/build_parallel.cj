@@ -10,6 +10,7 @@ import std.collection.*
 import std.collection.concurrent.*
 import std.convert.*
 import std.deriving.Derive
+import std.env.getVariable
 import std.env.getVariables
 import std.fs.*
 import std.regex.*
@@ -1500,6 +1501,7 @@ private class Rebuilder {
     private let logger: BoundedFileLogger
     private let verbose: Bool
     private let semaphore: ?Semaphore
+    private let jobserver: ?Jobserver
     private let barrier: Barrier
     private let rebuiltTasks: HashSet<TaskId> = HashSet<TaskId>()
 
@@ -1521,6 +1523,10 @@ private class Rebuilder {
             case None => None
             case Some(maxJobs) => Some(Semaphore(maxJobs))
         }
+        this.jobserver = match (jobs) {
+            case None => None
+            case Some(maxJobs) => createJobserver(maxJobs)
+        }
         this.barrier = Barrier(tasksCount + 1)
     }
 
@@ -1536,7 +1542,13 @@ private class Rebuilder {
         }
 
         barrier.wait()
-        return collectResults()
+        return try {
+            collectResults()
+        } finally {
+            if (let Some(server) <- jobserver) {
+                finishJobserver(server)
+            }
+        }
     }
 
     func getRebuiltTasks(): HashSet<TaskId> {
@@ -1547,9 +1559,20 @@ private class Rebuilder {
         match ((semaphore, canAcquire)) {
             case (Some(s), true) =>
                 s.acquire()
-                let result = body()
-                s.release()
-                result
+                try {
+                    if (let Some(server) <- jobserver) {
+                        let permit = server.acquire()
+                        try {
+                            body()
+                        } finally {
+                            permit.release()
+                        }
+                    } else {
+                        body()
+                    }
+                } finally {
+                    s.release()
+                }
             case _ => body()
         }
     }
@@ -1598,18 +1621,39 @@ private class Rebuilder {
         }
     }
 
-    private func waitForDependencies(id: TaskId): Array<TaskResult> {
-        let depsToWait = match (id) {
+    private func linkConsumesTransitiveArchives(id: TaskId): Bool {
+        match (id) {
+            case Link(_, _, _, _, _, _) => true
+            case Compile(_, _, _, _, outputType, _) => outputType == Exe || outputType == Dynamic
+            case _ => false
+        }
+    }
+
+    private func depsToWaitFor(id: TaskId): Array<TaskId> {
+        if (linkConsumesTransitiveArchives(id)) {
+            let directDeps = dirtyGraph.incoming(id)
+            let depsToWait = ArrayList<TaskId>(directDeps)
+            for (dependency in dirtyGraph.incomingClosure([id]).toposort
+                where dependency != id && !directDeps.contains(dependency)) {
+                depsToWait.add(dependency)
+            }
+            return depsToWait.toArray()
+        }
+        match (id) {
             case Monitor(_, _, _, _, _) => Array<TaskId>()
-            case Link(_, _, _, _, _, _) =>
-                let directDeps = dirtyGraph.incoming(id)
-                let depsToWait = ArrayList<TaskId>(directDeps)
-                for (dependency in dirtyGraph.incomingClosure([id]).toposort
-                    where dependency != id && !directDeps.contains(dependency)) {
-                    depsToWait.add(dependency)
-                }
-                depsToWait.toArray()
             case _ => dirtyGraph.incoming(id)
+        }
+    }
+
+    private func waitForDependencies(id: TaskId): Array<TaskResult> {
+        let depsToWait = depsToWaitFor(id)
+        if (let Some(_) <- getVariable("CJPM_WAIT_DEPS_DIAG")) {
+            let parts = ArrayList<String>()
+            for (dep in depsToWait) {
+                let hit = if (futureMap.contains(dep)) { "HIT" } else { "MISS" }
+                parts.add("${dep}:${hit}")
+            }
+            eprintln("[CJPM_WAIT_DEPS] id=${id} n=${depsToWait.size} deps=[${String.join(parts.toArray(), delimiter: ",")}]")
         }
         depsToWait.map { it: TaskId => futureMap[it].get() }
     }
@@ -1849,6 +1893,7 @@ private func callCompiler(compileTask: CompileTask, args: ArrayList<String>, env
     var execCmdFlag: Bool = true
 
     specifyCjcJobs(args, buildConfig.cjcJobs)
+    configureJobserverEnvironment(envBuilder)
 
     let env = getVariables()
     let commandStr = getCmdStr(envBuilder.asCliStrings(env), COMPILE_TOOL, args)
