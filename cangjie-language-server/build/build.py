@@ -68,7 +68,7 @@ def download_flatbuffers(args):
     subprocess.run(checkout_cmd, cwd=flatbuffers_dir, check=True)
 
 
-def generate_flat_header():
+def generate_flat_header(jobs=0):
     env = os.environ.copy()
     env["ZERO_AR_DATE"] = "1"
     index_file = os.path.join(HOME_DIR, "generate", "index.fbs")
@@ -81,7 +81,9 @@ def generate_flat_header():
         os.makedirs(flatbuffers_build_dir)
     compile_cmd = ["cmake", flatbuffers_dir, "-G", get_generator(), "-DFLATBUFFERS_BUILD_TESTS=OFF"]
     subprocess.run(compile_cmd, cwd=flatbuffers_build_dir, check=True, env=env)
-    build_cmd = ["cmake", "--build", flatbuffers_build_dir, "-j8"]
+    build_cmd = ["cmake", "--build", flatbuffers_build_dir]
+    if jobs > 0:
+        build_cmd.extend(["-j", str(jobs)])
     subprocess.run(build_cmd, cwd=flatbuffers_build_dir, check=True, env=env)
     flatc_binary = "flatc"
     if IS_WINDOWS:
@@ -154,9 +156,11 @@ def prepare_build(args):
         download_json()
     if not os.path.exists(os.path.join(THIRDPARTY_DIR, "flatbuffers")):
         download_flatbuffers(args)
-        generate_flat_header()
+    if not os.path.exists(os.path.join(THIRDPARTY_DIR, "flatbuffers", "include", "index_generated.h")):
+        generate_flat_header(args.jobs)
     if not os.path.exists(os.path.join(THIRDPARTY_DIR, "sqlite3")):
         download_sqlite(args)
+    if not os.path.exists(os.path.join(THIRDPARTY_DIR, "sqlite3", "amalgamation", "sqlite3.c")):
         build_sqlite_amalgamation()
 
 def get_generator():
