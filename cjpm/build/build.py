@@ -31,8 +31,26 @@ def check_call(command, cwd=None):
         print(f"Command '{e.cmd}' returned non-zero exit status {e.returncode}.")
         return e.returncode
 
-# Build libfswatcher
-def build_fswatcher(cmake_option="", make_prefix=""):
+def positive_jobs(value):
+    try:
+        jobs = int(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError("jobs must be a positive integer")
+    if jobs < 1:
+        raise argparse.ArgumentTypeError("jobs must be a positive integer")
+    return jobs
+
+
+def available_jobs():
+    try:
+        return max(1, len(os.sched_getaffinity(0)))
+    except (AttributeError, OSError):
+        return os.cpu_count() or 1
+
+
+# Build libfswatcher. Native and Cangjie phases run sequentially and share
+# the caller's allocation; neither phase multiplies the producer budget.
+def build_fswatcher(cmake_option="", make_prefix="", jobs=1):
     if os.path.exists(CPP_OUT_DIR):
         shutil.rmtree(CPP_OUT_DIR)
     if not os.path.exists(THIRD_PARTY_LIBUV_DIR):
@@ -46,7 +64,7 @@ def build_fswatcher(cmake_option="", make_prefix=""):
     returncode = check_call(f"cmake .. {cmake_option} -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release", cwd=CPP_BUILD_DIR)
     if returncode != 0:
         return returncode
-    returncode = check_call(f"{make_prefix}make -j4", cwd=CPP_BUILD_DIR)
+    returncode = check_call(f"{make_prefix}make -j{jobs}", cwd=CPP_BUILD_DIR)
     if returncode != 0:
         return returncode
     os.makedirs(CPP_OUT_DIR, exist_ok=True)
@@ -62,7 +80,8 @@ def build_fswatcher(cmake_option="", make_prefix=""):
     return 0
 
 # Build cjpm
-def build(build_type, target, rpath=None, native_only=False):
+def build(build_type, target, rpath=None, native_only=False, jobs=1):
+    jobs = min(positive_jobs(jobs), available_jobs())
     if not build_type:
         build_type = ""
     if not target:
@@ -120,10 +139,7 @@ def build(build_type, target, rpath=None, native_only=False):
         print("error: cjpm only support 'release' and 'debug' mode of compiling.")
         return 1
 
-    if is_windows:
-        common_option = f"--trimpath={CURRENT_DIR} {debug_mode} --import-path {os.path.join(CURRENT_DIR,'bin')}"
-    else:
-        common_option = f"-j1 --trimpath={CURRENT_DIR} {debug_mode} --import-path {os.path.join(CURRENT_DIR,'bin')}"
+    common_option = f"-j{jobs} --trimpath={CURRENT_DIR} {debug_mode} --import-path {os.path.join(CURRENT_DIR,'bin')}"
 
     # Get cjc executable file
     if is_windows:
@@ -143,7 +159,7 @@ def build(build_type, target, rpath=None, native_only=False):
 
     returncode = 0
     if is_linux or is_macos:
-        returncode = build_fswatcher("")
+        returncode = build_fswatcher("", jobs=jobs)
     if is_windows:
         root_include = os.path.join(os.environ.get("MINGW_PATH"), "include")
         target_include = os.path.join(os.environ.get("MINGW_PATH"), "x86_64-w64-mingw32", "include")
@@ -155,9 +171,9 @@ def build(build_type, target, rpath=None, native_only=False):
             except Exception as e:
                 print(f"Error: failed to copy include - {str(e)}")
                 return 1
-        returncode = build_fswatcher('-DCMAKE_TOOLCHAIN_FILE=../llvm-mingw-toolchain.cmake -DHOST_ARCH=x86_64 -DUV_BUILD_TESTS=OFF -G "MinGW Makefiles"', "mingw32-")
+        returncode = build_fswatcher('-DCMAKE_TOOLCHAIN_FILE=../llvm-mingw-toolchain.cmake -DHOST_ARCH=x86_64 -DUV_BUILD_TESTS=OFF -G "MinGW Makefiles"', "mingw32-", jobs=jobs)
     if is_cross_windows:
-        returncode = build_fswatcher("-DCMAKE_TOOLCHAIN_FILE=../cross-windows-toolchain.cmake -DHOST_ARCH=x86_64 -DUV_BUILD_TESTS=OFF")
+        returncode = build_fswatcher("-DCMAKE_TOOLCHAIN_FILE=../cross-windows-toolchain.cmake -DHOST_ARCH=x86_64 -DUV_BUILD_TESTS=OFF", jobs=jobs)
     if returncode != 0 or native_only:
         return returncode
 
@@ -262,6 +278,9 @@ def main():
                              dest='native_only',
                              help='Only build native code')
 
+    build_parser.add_argument('-j', '--jobs', type=positive_jobs,
+                              help='Shared native/Cangjie CPU budget (default: CANGJIE_BUILD_JOBS or available CPUs)')
+
     # Install command
     install_parser = subparsers.add_parser('install', help='Install cjpm')
     install_parser.add_argument('--prefix', help='Specify installation prefix')
@@ -272,7 +291,12 @@ def main():
     args = parser.parse_args()
 
     if args.command == 'build':
-        return build(build_type=args.build_type, target=args.target, rpath=args.rpath, native_only=args.native_only)
+        try:
+            jobs = args.jobs if args.jobs is not None else positive_jobs(
+                os.environ.get('CANGJIE_BUILD_JOBS', available_jobs()))
+        except argparse.ArgumentTypeError as error:
+            parser.error(str(error))
+        return build(build_type=args.build_type, target=args.target, rpath=args.rpath, native_only=args.native_only, jobs=jobs)
     elif args.command == 'install':
         return install(prefix=args.prefix)
     elif args.command == 'clean':
@@ -282,4 +306,4 @@ def main():
         return 0
 
 if __name__ == '__main__':
-    main()
+    sys.exit(main())
