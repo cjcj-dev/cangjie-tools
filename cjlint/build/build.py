@@ -184,7 +184,7 @@ def build(args):
 
     check_compiler(args)
     args.sources = prepare_build(args)
-    if any(arg.startswith("-DCMAKE_BUILD_TYPE=") for arg in args.cmake_args):
+    if any(re.match(r"-DCMAKE_BUILD_TYPE(:[^=]+)?=", arg) for arg in args.cmake_args):
         raise ValueError("select build type with -t, not a CMake override")
     """cjlint build"""
     LOG.info("begin build...\n")
@@ -218,7 +218,7 @@ def clean(args):
 def install(args):
     """install targets"""
     LOG.info("begin install targets...")
-    install_path = args.install_prefix if args.install_prefix else CMAKE_OUTPUT_DIR
+    install_path = os.path.abspath(args.install_prefix) if args.install_prefix else CMAKE_OUTPUT_DIR
     output = subprocess.Popen(
         ["cmake", "--install", "build", "--prefix", install_path],
         cwd=BUILD_DIR,

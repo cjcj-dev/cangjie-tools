@@ -224,7 +224,7 @@ def build(args):
 
     setup_compiler()
     args.sources = prepare_build(args)
-    if any(arg.startswith(("-DCMAKE_BUILD_TYPE=", "-DCJPROF_TARGET=")) for arg in args.cmake_args):
+    if any(re.match(r"-D(CMAKE_BUILD_TYPE|CJPROF_TARGET)(:[^=]+)?=", arg) for arg in args.cmake_args):
         raise ValueError("select build type/target with -t/--target, not CMake overrides")
     # A failed/skipped JNI rebuild must not leave an older installable library.
     jni_root = os.path.join(HOME_DIR, "bridge", "jni")
@@ -283,7 +283,7 @@ def clean(args):
 def install(args):
     """install targets"""
     LOG.info("begin install targets...")
-    install_path = args.install_prefix if args.install_prefix else CMAKE_OUTPUT_DIR
+    install_path = os.path.abspath(args.install_prefix) if args.install_prefix else CMAKE_OUTPUT_DIR
     # Use the actual native CMake configuration. No default Debug fallback and
     # no copy from a stale JNI dist if this validation/child fails.
     cache = {}
