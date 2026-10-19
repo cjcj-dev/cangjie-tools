@@ -327,7 +327,7 @@ void DataflowRuleVAR01Check::CheckMemberVar(const CHIR::Store* store, ClassMembe
     TRY_GET_EXPR(store->GetLocation(), expr);
     if (expr->GetExprKind() == CHIR::ExprKind::GET_ELEMENT_REF) {
         auto getElementRef = StaticCast<CHIR::GetElementRef*>(expr);
-        auto baseTy = GetBaseTy(getElementRef->GetLocation()->GetType());
+        auto baseTy = GetBaseTy(getElementRef->GetBase()->GetType());
         auto customTy = DynamicCast<CHIR::CustomType*>(baseTy);
         auto path = getElementRef->GetPath();
         CheckMemberVarHelper(customTy, path, memberVarMap);
@@ -360,7 +360,7 @@ Ptr<CHIR::Value> DataflowRuleVAR01Check::ResolveBaseVar(Ptr<CHIR::Value> value)
     }
     if (expr->GetExprKind() == CHIR::ExprKind::GET_ELEMENT_REF) {
         auto getElementRef = StaticCast<CHIR::GetElementRef*>(expr);
-        return ResolveBaseVar(getElementRef->GetLocation());
+        return ResolveBaseVar(getElementRef->GetBase());
     }
     return value;
 }

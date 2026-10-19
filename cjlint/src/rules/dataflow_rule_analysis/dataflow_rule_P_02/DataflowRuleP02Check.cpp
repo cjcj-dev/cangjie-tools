@@ -195,10 +195,22 @@ static std::string GetPathStr(const CHIR::Value *base, const std::vector<uint64_
     return pathStr;
 }
 
+// The read reference stores its base in operand 0; StoreElementRef has a
+// separate destination accessor. Keep both paths when resolving member chains.
+static CHIR::Value* GetMemberBase(const CHIR::GetElementRef& ref)
+{
+    return ref.GetBase();
+}
+
+static CHIR::Value* GetMemberBase(const CHIR::StoreElementRef& ref)
+{
+    return ref.GetLocation();
+}
+
 template <typename T>
 DataflowRuleP02Check::MemberVarInChain DataflowRuleP02Check::GetMemberVarInChain(const T* getElementRef)
 {
-    auto base = getElementRef->GetLocation();
+    auto base = GetMemberBase(*getElementRef);
     auto path = getElementRef->GetPath();
     if (!base->IsLocalVar()) {
         std::string str = base->GetSrcCodeIdentifier();
@@ -381,8 +393,7 @@ void DataflowRuleP02Check::CheckSpawnClosure(const CHIR::Lambda *spawnClosure)
                 if (!expr->IsTerminator()) {
                     CheckNonTerminal(expr, isLock);
                 } else {
-                    auto term = StaticCast<CHIR::Terminator *>(expr);
-                    for (auto block : term->GetSuccessors()) {
+                    for (auto block : expr->GetSuccessors()) {
                         visitBlock(block, isLock, visited);
                     }
                 }
