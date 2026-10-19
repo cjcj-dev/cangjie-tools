@@ -148,11 +148,13 @@ for(const tool of Object.keys(metadata)){
 const source=path.join(root,'cmake/CjcVersion.cmake'),before=fs.readFileSync(source,'utf8');
 const anchor='    set(CJC_VERSION_MACRO "${macro}")';assert.equal(before.split(anchor).length,2);
 const cut=before.replace(anchor,'    set(CJC_VERSION_ESCAPED "CUT_VERSION")\n'+anchor);
-const i=before.split('\n').findIndex(x=>x===anchor);
+const lines=before.split('\n');
+if(lines.at(-1)==='')lines.pop();
+const i=lines.findIndex(x=>x===anchor),lo=Math.max(0,i-3),hi=Math.min(i+4,lines.length);
 fs.writeFileSync(path.join(work,'cut.diff'),['diff --git a/cmake/CjcVersion.cmake b/cmake/CjcVersion.cmake',
- '--- a/cmake/CjcVersion.cmake','+++ b/cmake/CjcVersion.cmake',`@@ -${i-2},7 +${i-2},8 @@`,
- ...before.split('\n').slice(i-3,i).map(x=>' '+x),'+    set(CJC_VERSION_ESCAPED "CUT_VERSION")',
- ...before.split('\n').slice(i,i+4).map(x=>' '+x),''].join('\n'));
+ '--- a/cmake/CjcVersion.cmake','+++ b/cmake/CjcVersion.cmake',`@@ -${lo+1},${hi-lo} +${lo+1},${hi-lo+1} @@`,
+ ...lines.slice(lo,i).map(x=>' '+x),'+    set(CJC_VERSION_ESCAPED "CUT_VERSION")',
+ ...lines.slice(i,hi).map(x=>' '+x),''].join('\n'));
 try{
  fs.writeFileSync(source,cut);
  control('cut-independent');
