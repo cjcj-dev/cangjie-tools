@@ -42,9 +42,18 @@ def run_jni_script(args):
     jni_script_file = os.path.join(BUILD_DIR, "../bridge/jni/build.py")
     cmd = [sys.executable, jni_script_file]
     cmd.extend(args)
-    
+
     # Inherit stdout/stderr and the child's actual failure; never accept old dist.
-    subprocess.run(cmd, check=True)
+    LOG.info("JNI child cwd=%s argv=%s", os.getcwd(), json.dumps(cmd))
+    try:
+        result = subprocess.run(cmd, check=True)
+    except subprocess.CalledProcessError as error:
+        LOG.error("JNI child rc=%d", error.returncode)
+        raise
+    except OSError as error:
+        LOG.error("JNI child not started: %s", error)
+        raise
+    LOG.info("JNI child rc=%d", result.returncode)
 
 DEPENDENCIES = {"json": "include/nlohmann/json.hpp", "httplib": "httplib.h",
                 "runtime": "runtime/src/Demangler/CMakeLists.txt", "bounds": "include/securec.h"}
