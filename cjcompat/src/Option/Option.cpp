@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "cjcompat/Option/Option.h"
+#include "CjcVersion.h"
 
 using namespace Cangjie;
 using namespace CjComplienceChecker;

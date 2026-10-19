@@ -154,17 +154,9 @@ endif ()
 add_compile_definitions(CJCOMPAT_VERSION="${CJCOMPAT_VERSION_STR}")
 message(STATUS "Cangjie Compliance: ${CJCOMPAT_VERSION_STR}")
 
-# Obtain CJC version
-message(STATUS "Obtain cjc version")
-execute_process(COMMAND "${CMAKE_COMMAND}" -E env "CANGJIE_HOME=${CANGJIE_HOME}"
-    "${CJC_EXECUTABLE}" -v
-    RESULT_VARIABLE CJC_VERSION_RC OUTPUT_VARIABLE CJC_VERSION_STR ERROR_VARIABLE ERROR_MSG
-    OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_STRIP_TRAILING_WHITESPACE)
-if(NOT CJC_VERSION_RC EQUAL 0)
-    message(FATAL_ERROR "Selected SDK cjc -v failed (${CJC_VERSION_RC}): ${ERROR_MSG}")
-endif()
-string(REPLACE "\n" " " CJC_VERSION_CLEANED "${CJC_VERSION_STR}")
-add_compile_definitions(CJCOMPAT_CANGJIE_VER="${CJC_VERSION_CLEANED}")
+include(../cmake/CjcVersion.cmake)
+cangjie_cjc_version_header("${CMAKE_CURRENT_BINARY_DIR}/generated/CjcVersion.h" CJCOMPAT_CANGJIE_VER)
+include_directories("${CMAKE_CURRENT_BINARY_DIR}/generated")
 
 if (BUILD_SHARED_LIBS)
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)

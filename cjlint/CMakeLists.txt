@@ -134,18 +134,9 @@ endif()
 add_compile_definitions(CJLINT_VERSION="${CJLINT_VERSION_STR}")
 message(STATUS "Cangjie Lint: ${CJLINT_VERSION_STR}")
 
-# Obtain CJC version
-message(STATUS "Obtain cjc version")
-execute_process(COMMAND bash -c "./cjc -v" OUTPUT_VARIABLE CJC_VERSION ERROR_VARIABLE ERROR_MSG
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_STRIP_TRAILING_WHITESPACE
-    WORKING_DIRECTORY "${CJC_DIR}")
-if (ERROR_MSG)
-    message(STATUS "Obtain cjc version failed in directory ${CJC_DIR}: ${ERROR_MSG}")
-else()
-    message(STATUS "${CJC_VERSION}") # CJC_VERSION comes with "Cangjie version"
-    add_compile_definitions(CJC_VERSION="${CJC_VERSION}")
-endif ()
+include(../cmake/CjcVersion.cmake)
+cangjie_cjc_version_header("${CMAKE_CURRENT_BINARY_DIR}/generated/CjcVersion.h" CJC_VERSION)
+include_directories("${CMAKE_CURRENT_BINARY_DIR}/generated")
 
 if (BUILD_SHARED_LIBS)
     set(CMAKE_POSITION_INDEPENDENT_CODE ON)

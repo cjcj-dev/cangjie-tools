@@ -1,0 +1,3 @@
+// Generated from the selected SDK's successful cjc -v; do not edit.
+#pragma once
+#define @CJC_VERSION_MACRO@ "@CJC_VERSION_ESCAPED@"

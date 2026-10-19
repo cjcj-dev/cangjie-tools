@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Cjlint.h"
+#include "CjcVersion.h"
 #include <common/CommonFunc.h>
 #include <regex>
 #include <string>
