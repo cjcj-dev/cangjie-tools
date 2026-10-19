@@ -28,8 +28,10 @@ function compile(unit,label){
  console.log(name+' rc='+p.status);return p;
 }
 function green(unit,label){assert.equal(compile(unit,label).status,0,unit.relative);}
+const selected=c.only ? units.filter(u=>c.only.includes(u.relative)) : units;
+if(c.only)assert.equal(selected.length,c.only.length,'unknown compile selector');
 const failures=[];
-for(const unit of units)if(compile(unit,'candidate').status!==0)failures.push(unit.relative);
+for(const unit of selected)if(compile(unit,'candidate').status!==0)failures.push(unit.relative);
 assert.deepEqual(failures,[],'complete consumer compile failures');
 const common=units.find(u=>u.relative==='src/common/CommonFunc.cpp'),checker=units.find(u=>u.relative==='src/checker/Checker.cpp');
 function cut(relative,from,to,target,control,diagnostic,label){
@@ -41,4 +43,4 @@ function cut(relative,from,to,target,control,diagnostic,label){
 }
 cut('src/common/CommonFunc.cpp','getElementRef->GetBase()->GetType()','getElementRef->GetLocation()->GetType()',common,checker,/no member named 'GetLocation'.*GetElementRef/,'base');
 cut('src/rules/dataflow_rule_analysis/dataflow_rule_G_FIO_01/DataflowRuleGFIO01Check.h','const Cangjie::CHIR::Expression* terminator','const Cangjie::CHIR::Terminator* terminator',checker,common,/no type named 'Terminator'/,'analysis');
-fs.writeFileSync(path.join(c.work,'result.json'),JSON.stringify({units:units.length,commands:records.length,candidate:units.length,red:2,controls:2,restored:2,scope:'syntax-only; no link/install/rule execution'},null,2));
+fs.writeFileSync(path.join(c.work,'result.json'),JSON.stringify({units:units.length,commands:records.length,candidate:selected.length,red:2,controls:2,restored:2,scope:'syntax-only; no link/install/rule execution'},null,2));

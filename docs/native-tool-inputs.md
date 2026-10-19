@@ -141,3 +141,40 @@ restoration. The original generated-header module is used, not a test re-creatio
 of its escaping algorithm. This finite harness does not build complete cjlint or
 cjcompat and cannot replace the SDK owner's public producer/install/business
 recovery. It does not modify a cjc launcher or generated build files.
+
+### Fixed f07c lint CHIR consumers
+
+Lint uses the selected SDK headers and `tools/lib` without changing that SDK.
+For compiler `f07c55738c12c154160c313c630a42a73a51025d`, both
+`GetElementRef` and `StoreElementRef` expose `GetBase()` (operands 0 and 1,
+respectively). `Load`/`Store` retain `GetLocation()`. P02's read/write member
+chain template therefore uses `GetBase()` for both element-reference types;
+CommonFunc and VAR01 follow the same base while retaining their paths.
+
+Terminator expressions use `Expression`, with `IsTerminator()` and successor
+access on that base. Analysis overrides and Results visitors accept that type;
+CHK01/P02 retain their terminator guards, recursive traversal and visited sets.
+The throwing call kinds/classes are `TRY_APPLY`/`TryApply` and
+`TRY_INVOKE`/`TryInvoke`; their arguments, result and success/error edges remain
+in use by CHK01, FIO01, OTH01 and P02. OTH01 uses exact expression-kind tests.
+
+`TypeCast` is now a common base for class/numeric casts, boxing/unboxing and
+generic/concrete conversions (including `TryNumericCast`). CHK01, P02 and
+SER03 use the compiler's `DynamicCast<TypeCast>` classification. CHK01 carries
+cast taint across a terminating numeric cast and still visits its successors.
+Its former separate Box path is covered by the same base without duplication.
+All seven dataflow rules remain registered, including SER03, which consumes
+CommonFunc's member names. No rule, diagnostics or analysis is disabled.
+
+`node tests/cjlint-chir.mjs <config.json>` compiles the actual CommonFunc,
+Checker and all dataflow translation units derived from the SDK's generated
+Ninja build graph against the actual selected SDK. This is a finite
+`-fsyntax-only` gate, not a full build, installation or rule execution. Config
+requires `source` (private cjlint root), `original` (original cjlint root in the
+Ninja includes), `ninja`, `work`, and `cxx`. Optional `only` selects exact source
+paths for an affected incremental check; unselected units are not tested in
+that invocation. No generated Ninja file is edited. Actual source cuts restore
+the old member access and old Analysis callback type, require the corresponding
+compiler diagnostics, retain independent consumers and restore source bytes in
+`finally`. The SDK owner performs normal public build/install/rule recovery on
+the fixed successor and retained failed cache; this gate does not replace it.
