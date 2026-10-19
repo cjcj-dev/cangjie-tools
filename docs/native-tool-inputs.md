@@ -111,3 +111,33 @@ check, not profiling business or SDK qualification. The old producer and option
 cut temporarily replace only this private checkout's files; finally blocks
 restore bytes. This script is supplied for resource/input admission; its
 presence does not mean any arm has run. Existing unrelated gates stay unchanged.
+
+cjlint and cjcompat collect the selected SDK's complete `cjc -v` stdout with
+`cmake/CjcVersion.cmake`. The command is an argument vector without `bash -c`;
+the selected SDK is explicit in `CANGJIE_HOME`. A nonzero child status or launch
+failure is a configuration error even if stdout looks valid. Successful stderr
+is reported as diagnostics and does not erase the version. Blank stdout fails.
+CRLF and lone CR are normalized to LF, only trailing line terminators are
+removed, and all version lines, spaces and tabs are otherwise preserved.
+
+The result is escaped as a C++ string in a private generated `CjcVersion.h`,
+included by the existing `PrintVersion` consumer in each tool. Version text is
+not passed through command-line definitions or a generated Ninja file. The
+header escapes backslashes, double quotes, LF and tabs; CMake's `@ONLY` template
+does not substitute `${...}` present in compiler output. Both tools retain the
+same version macro names and print the complete compiler version. The header is
+an internal build input and adds no installed SDK payload or runtime dependency.
+
+`tests/cjc-version.mjs ABS/config.json` is a separate finite native gate requiring
+`{sdk:ABS,work:FRESH_ABS,jobs:2}`. Only run in an admitted private source tree via
+box/workflow with the assigned resource limits. It executes the actual selected
+SDK cjc for normal inputs, compiles the real CMake version calls and verbatim
+PrintVersion bodies in a small harness with Ninja, and tests CRLF/string special
+characters with an explicitly controlled boundary executable (Ninja and Unix
+Makefiles). Nonzero/empty/missing producers fail and an independent executable
+remains usable. A cut changes the production module's header value; the exact
+consumer assertion must fail after a successful build, then recover after source
+restoration. The original generated-header module is used, not a test re-creation
+of its escaping algorithm. This finite harness does not build complete cjlint or
+cjcompat and cannot replace the SDK owner's public producer/install/business
+recovery. It does not modify a cjc launcher or generated build files.
