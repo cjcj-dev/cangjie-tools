@@ -6,6 +6,7 @@
 #
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+import argparse
 import os
 import sys
 import shutil
@@ -35,45 +36,18 @@ def echo_warn(msg):
 def echo_error(msg):
     print(f"{RED}[ERROR]{NC} {msg}", file=sys.stderr)
 
-def find_jni_headers_and_copy(stdinput):
-    jni_include_paths = []
-    for line in stdinput.splitlines():
-        if "Found JNI:" in line:
-            paths = line.split("Found JNI:")[1].strip()
-            jni_include_paths = paths.split(";")
-
-    jni_h_directory = None
-    for inc_dir in jni_include_paths:
-        inc_path = Path(inc_dir)
-        if inc_path.exists() and (inc_path / "jni.h").is_file():
-            jni_h_directory = inc_path
-            break
-
-    if not jni_h_directory:
-        raise FileNotFoundError(f"Cannot find jni.h, search paths: {jni_include_paths}")
-
-    win32_target_dir = jni_h_directory / "win32"
-    target_file = win32_target_dir / "jni_md.h"
-    if target_file.is_file():
-        return ""
-    win32_target_dir.mkdir(exist_ok=True)
-
-    source_file = SCRIPT_DIR / "cross_win" / "jni_md.h"
-    if not source_file.is_file():
-        raise FileNotFoundError(f"source_file doesn't exist: {source_file}")
-    shutil.copy2(source_file, target_file)
-    return win32_target_dir
-
 def clean():
     echo_info("Cleaning build directories...")
     if BUILD_DIR.exists():
         shutil.rmtree(BUILD_DIR)
+    if DIST_DIR.exists():
+        shutil.rmtree(DIST_DIR)
     if JAVA_OUT.exists():
         shutil.rmtree(JAVA_OUT)
     echo_info("Clean completed")
 
 
-def build_jni(debug=True, target="native"):
+def build_jni(debug=False, target="native", jobs=1, prof_library=None):
     build_type = "Debug" if debug else "Release"
     echo_info(f"Building JNI library ({build_type})...")
 
@@ -87,7 +61,15 @@ def build_jni(debug=True, target="native"):
         echo_error(f"{make_cmd} not found")
         sys.exit(1)
 
-    win32_target_dir = ""
+    if prof_library is None:
+        prof_library = default_prof_library(target)
+    if not Path(prof_library).is_file():
+        raise FileNotFoundError(f"Build the selected parent cjprof library first: {prof_library}")
+    # Do not let an old installed JNI library survive a failed new build.
+    if DIST_DIR.exists():
+        shutil.rmtree(DIST_DIR)
+    for lib in LIBS:
+        (BUILD_DIR / lib).unlink(missing_ok=True)
     if target == "windows-x86_64":
         result = subprocess.run([
             "cmake",
@@ -97,24 +79,19 @@ def build_jni(debug=True, target="native"):
             "-DCMAKE_CXX_COMPILER=" + "x86_64-w64-mingw32-g++",
             "-DSTRIP_LIB_PREFIX=" + "ON",
             "..",
-            "-DCMAKE_LIBRARY_PATH=../../build/build/src"
+            "-DCJPROF_LIBRARY=" + str(Path(prof_library).resolve()),
+            "-DCJPROF_TARGET=" + target,
             ], cwd=BUILD_DIR, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         echo_info(f"{result.stdout}")
         echo_info(f"{result.stderr}")
-        win32_target_dir = find_jni_headers_and_copy(result.stdout)
     else:
-        cmake_args = ["cmake", "-DCMAKE_BUILD_TYPE=" + build_type, "..", "-DCMAKE_LIBRARY_PATH=../../build/build/src"]
+        cmake_args = ["cmake", "-DCMAKE_BUILD_TYPE=" + build_type, "..",
+                      "-DCJPROF_LIBRARY=" + str(Path(prof_library).resolve()),
+                      "-DCJPROF_TARGET=" + target]
         if sys.platform == "win32":
             cmake_args += ["-G", "MinGW Makefiles", "-DSTRIP_LIB_PREFIX=" + "ON"]
         subprocess.run(cmake_args, cwd=BUILD_DIR, check=True)
-    try:
-        subprocess.run([make_cmd, f"-j{os.cpu_count() or 1}"], cwd=BUILD_DIR, check=True)
-    except subprocess.CalledProcessError as e:
-        if win32_target_dir != "":
-            shutil.rmtree(win32_target_dir)
-        raise RuntimeError(f"{make_cmd} error: {e.stderr}") from e
-    if win32_target_dir != "":
-        shutil.rmtree(win32_target_dir)
+    subprocess.run(["cmake", "--build", str(BUILD_DIR), "--parallel", str(jobs)], check=True)
     echo_info("JNI library built successfully")
 
 
@@ -193,21 +170,44 @@ def build_and_run():
     compile_java()
     run_demo()
 
-def install():
+def cached_value(key):
+    with (BUILD_DIR / "CMakeCache.txt").open(encoding="utf-8") as cache:
+        for line in cache:
+            if line.startswith(key + ":"):
+                return line.rstrip().split("=", 1)[1]
+    raise ValueError(f"Missing {key} in JNI CMake cache; run build first")
+
+
+def library_name(target="native"):
+    if target == "windows-x86_64" or sys.platform == "win32":
+        return "cjprof-jni.dll"
+    return "libcjprof-jni.dylib" if sys.platform == "darwin" else "libcjprof-jni.so"
+
+
+def default_prof_library(target):
+    name = library_name(target).replace("-jni", "")
+    return SCRIPT_DIR.parent.parent / "build" / "build" / "src" / name
+
+
+def install(debug=False, target="native", prof_library=None):
     echo_info("Installing distribution files...")
 
-    if not any((BUILD_DIR / lib).exists() for lib in LIBS):
-        build_jni()
+    expected_type = "Debug" if debug else "Release"
+    if cached_value("CMAKE_BUILD_TYPE") != expected_type or cached_value("CJPROF_TARGET") != target:
+        raise ValueError("JNI configuration differs from install request; run matching build first")
+    if Path(cached_value("CJPROF_LIBRARY")).resolve() != Path(prof_library or default_prof_library(target)).resolve():
+        raise ValueError("JNI parent library differs from selected native producer")
+    name = library_name(target)
+    source = BUILD_DIR / name
+    if not source.is_file():
+        raise FileNotFoundError(f"Missing built JNI library: {source}; install never builds implicitly")
 
     if DIST_DIR.exists():
         shutil.rmtree(DIST_DIR)
     DIST_DIR.mkdir(exist_ok=True)
 
-    for lib in LIBS:
-        src = BUILD_DIR / lib
-        if src.exists():
-            shutil.copy2(src, DIST_DIR / lib)
-            echo_info(f"  Copied {lib}")
+    shutil.copy2(source, DIST_DIR / name)
+    echo_info(f"  Copied {name}")
 
     echo_info(f"Installation completed: {DIST_DIR}")
     echo_info("")
@@ -241,46 +241,28 @@ def usage():
     print("  python build.py install             # Create distribution package")
 
 def main():
-    debug = True
-    cmd = "all"
-    target = "native"
-
-    i = 1
-    while i < len(sys.argv):
-        arg = sys.argv[i]
-        if arg == "-t" and i + 1 < len(sys.argv):
-            i += 1
-            build_type = sys.argv[i]
-            if build_type == "debug":
-                debug = True
-            elif build_type == "release":
-                debug = False
-            else:
-                echo_error(f"Unknown build type: {build_type}")
-                usage()
-                sys.exit(1)
-        elif arg == "--target":
-            i += 1
-            if i >= len(sys.argv):
-                echo_error("--target requires a value (e.g. windows-x86_64)")
-                usage()
-                sys.exit(1)
-            target = sys.argv[i]
-        elif not arg.startswith("-"):
-            cmd = arg
-        i += 1
-
+    parser = argparse.ArgumentParser(description="Build/install the cjprof JNI bridge")
+    parser.add_argument("command", nargs="?", default="all",
+                        choices=["all", "build", "install", "clean", "compile", "run"])
+    parser.add_argument("-t", "--build-type", choices=["debug", "release"], default="release")
+    parser.add_argument("--target", choices=["native", "windows-x86_64"], default="native")
+    parser.add_argument("-j", "--jobs", type=positive_jobs,
+                        default=os.environ.get("CANGJIE_BUILD_JOBS") or
+                        (len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1))
+    parser.add_argument("--prof-library", help="Exact built parent library")
+    args = parser.parse_args()
+    cmd, debug, target = args.command, args.build_type == "debug", args.target
     if cmd == "all":
         def build_and_run_with_release():
             clean()
-            build_jni(False)
+            build_jni(debug, target, args.jobs, args.prof_library)
             compile_java()
             run_demo()
         build_and_run_with_release()
     elif cmd == "build":
-        build_jni(debug, target)
+        build_jni(debug, target, args.jobs, args.prof_library)
     elif cmd == "install":
-        install()
+        install(debug, target, args.prof_library)
     elif cmd == "clean":
         clean()
     elif cmd == "compile":
@@ -292,5 +274,18 @@ def main():
         sys.exit(1)
 
 
+def positive_jobs(value):
+    jobs = int(value)
+    if jobs < 1:
+        raise argparse.ArgumentTypeError("jobs must be positive")
+    return jobs
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except subprocess.CalledProcessError as error:
+        sys.exit(error.returncode if error.returncode > 0 else 128 - error.returncode)
+    except (OSError, ValueError) as error:
+        echo_error(str(error))
+        sys.exit(1)

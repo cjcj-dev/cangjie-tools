@@ -113,9 +113,11 @@ if(NOT WIN32)
 endif()
 
 set(THIRD_PARTY_DIR ${CMAKE_SOURCE_DIR}/third_party)
-set(CANGJIE_ROOT ${THIRD_PARTY_DIR}/cangjie)
+set(CANGJIE_ROOT ${CANGJIE_HOME})
 set(CJC_DIR ${CANGJIE_ROOT}/bin)
-set(JSON_ROOT ${THIRD_PARTY_DIR}/json-v3.11.3)
+if(NOT EXISTS "${JSON_ROOT}/include/nlohmann/json.hpp")
+    message(FATAL_ERROR "JSON_ROOT must select the fixed JSON source")
+endif()
 
 LIST(APPEND labList
         pthread

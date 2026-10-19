@@ -7,6 +7,8 @@
 cmake_minimum_required(VERSION 3.10)
 
 project("cjprof")
+include(GNUInstallDirs)
+set(CJPROF_TARGET "native" CACHE STRING "Selected producer target")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CJPROF_VERSION_STR "1.2.0-beta.rc2")
@@ -61,13 +63,18 @@ else()
   message(WARNING "Unknown build type: ${CMAKE_BUILD_TYPE}")
 endif()
 
-include_directories(third_party/cpp-httplib)
-include_directories(third_party/third_party_json/include)
+foreach(required CJPROF_JSON_SOURCE CJPROF_HTTPLIB_SOURCE CJPROF_RUNTIME_SOURCE CJPROF_BOUNDS_SOURCE)
+  if(NOT IS_DIRECTORY "${${required}}")
+    message(FATAL_ERROR "Missing selected dependency ${required}")
+  endif()
+endforeach()
+include_directories("${CJPROF_HTTPLIB_SOURCE}")
+include_directories("${CJPROF_JSON_SOURCE}/include")
 
 if (NOT APPLE AND NOT WIN32)
-  include_directories(third_party/boundscheck/include)
-  include_directories(third_party/runtime/runtime/src)
-  add_subdirectory(third_party/runtime/runtime/src/Demangler EXCLUDE_FROM_ALL)
+  include_directories("${CJPROF_BOUNDS_SOURCE}/include")
+  include_directories("${CJPROF_RUNTIME_SOURCE}/runtime/src")
+  add_subdirectory("${CJPROF_RUNTIME_SOURCE}/runtime/src/Demangler" "${CMAKE_BINARY_DIR}/demangler" EXCLUDE_FROM_ALL)
   set_target_properties(cangjie-demangle PROPERTIES EXCLUDE_FROM_ALL FALSE)
 endif()
 

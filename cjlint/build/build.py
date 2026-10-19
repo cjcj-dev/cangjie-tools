@@ -9,6 +9,8 @@
 
 """CangjieCodeCheck build entry"""
 import argparse
+import json
+import re
 import logging
 import multiprocessing
 import os
@@ -20,7 +22,8 @@ from enum import Enum
 from logging.handlers import TimedRotatingFileHandler
 from subprocess import PIPE
 
-THREADS_NUM = multiprocessing.cpu_count() // 2
+THREADS_NUM = os.environ.get("CANGJIE_BUILD_JOBS") or (
+    len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else multiprocessing.cpu_count())
 FAIL_CASE_NUM = 0
 PASS_CASE_NUM = 0
 
@@ -41,29 +44,61 @@ ARCH_NAME = (
 )
 CAN_RUN_MAPLE = platform.system() == "Linux" and platform.machine() == "x86_64"
 
-JSON_GIT = "https://gitcode.com/openharmony/third_party_json.git"
+DEPENDENCIES = {"json": "include/nlohmann/json.hpp"}
 
-def download_json():
-    cmd = ["git", "clone", "-b", "OpenHarmony-v6.0-Release", "--depth=1", JSON_GIT, "json-v3.11.3"]
-    output = subprocess.Popen(cmd, cwd=THIRDPARTY_DIR, stdout=PIPE)
-    for line in output.stdout:
-        print(line.decode("ascii", "ignore").rstrip())
+def prepare_build(args):
+    """Resolve caller-selected fixed Git sources on both first and warm builds."""
+    with open(args.dependencies, encoding="utf-8") as source:
+        inputs = json.load(source)
+    selected = {}
+    for name, sentinel in DEPENDENCIES.items():
+        item = inputs[name]
+        repo, commit = item["repo"], item["commit"]
+        source = os.path.realpath(item["path"])
+        if not repo or not re.fullmatch(r"[0-9a-f]{40}", commit):
+            raise ValueError(f"{name}: expected repo and complete fixed commit")
+        if not os.path.exists(source):
+            subprocess.run(["git", "init", source], check=True)
+            subprocess.run(["git", "-C", source, "remote", "add", "origin", repo], check=True)
+        def query(*command):
+            return subprocess.check_output(["git", "-C", source, *command], text=True).strip()
+        if os.path.realpath(query("rev-parse", "--show-toplevel")) != source:
+            raise ValueError(f"{name}: expected independent source checkout: {source}")
+        if query("remote", "get-url", "origin") != repo:
+            raise ValueError(f"{name}: origin differs from selected repo: {source}")
+        head = subprocess.run(["git", "-C", source, "rev-parse", "--verify", "HEAD"],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if head.returncode:
+            subprocess.run(["git", "-C", source, "fetch", "--depth=1", "origin", commit], check=True)
+            subprocess.run(["git", "-C", source, "checkout", "--detach", commit], check=True)
+        if query("rev-parse", "HEAD") != commit or query("status", "--porcelain", "--untracked-files=no"):
+            raise ValueError(f"{name}: preserve mismatched/modified checkout; select a clean {commit} source")
+        if not os.path.isfile(os.path.join(source, sentinel)):
+            raise FileNotFoundError(f"{name}: missing {sentinel} in selected {source}")
+        selected[name] = source
+        LOG.info("dependency %s repo=%s commit=%s path=%s", name, repo, commit, source)
+    return selected
 
-def prepare_build():
-    if not os.path.exists(THIRDPARTY_DIR):
-        os.makedirs(THIRDPARTY_DIR)
-    if not os.path.exists(os.path.join(THIRDPARTY_DIR, "json-v3.11.3")):
-        download_json()
+
+def positive_jobs(value):
+    jobs = int(value)
+    if jobs < 1:
+        raise argparse.ArgumentTypeError("jobs must be positive")
+    return jobs
 
 def check_compiler(args):
     # use llvm toolchain on linux
     if not IS_WINDOWS:
-        clang_path = shutil.which("clang") + (" --gcc-toolchain={}".format(args.gcc_toolchain) if args.gcc_toolchain else "")
-        clang_pp_path = shutil.which("clang++") + (" --gcc-toolchain={}".format(args.gcc_toolchain) if args.gcc_toolchain else "")
+        clang_path = shutil.which("clang")
+        clang_pp_path = shutil.which("clang++")
         if not clang_path:
-            LOG.error("clang is required to build cangjie compiler")
+            raise FileNotFoundError("clang is required to build cjlint")
         if not clang_pp_path:
-            LOG.error("clang++ is requreed to build cangjie compiler")
+            raise FileNotFoundError("clang++ is required to build cjlint")
+
+        if args.gcc_toolchain:
+            clang_path += " --gcc-toolchain={}".format(args.gcc_toolchain)
+            clang_pp_path += " --gcc-toolchain={}".format(args.gcc_toolchain)
 
         os.environ["CC"] = clang_path
         os.environ["CXX"] = clang_pp_path
@@ -71,9 +106,9 @@ def check_compiler(args):
         c_compiler = shutil.which("gcc")
         cxx_compiler = shutil.which("g++")
         if not c_compiler:
-            LOG.error("gcc is required to build cangjie compiler")
+            raise FileNotFoundError("gcc is required to build cjlint")
         if not cxx_compiler:
-            LOG.error("g++ is requreed to build cangjie compiler")
+            raise FileNotFoundError("g++ is required to build cjlint")
         os.environ["CC"] = c_compiler
         os.environ["CXX"] = cxx_compiler
 
@@ -87,7 +122,7 @@ def log_output(output):
             returncode = output.returncode
             if returncode != 0:
                 LOG.error("build error: %d!\n", returncode)
-                sys.exit(1)
+                sys.exit(returncode if returncode > 0 else 128 - returncode)
             break
         try:
             LOG.info(line.decode("ascii", "ignore").rstrip())
@@ -132,12 +167,12 @@ def generate_cmake_defs(args):
             "-DCMAKE_C_COMPILER=" + "x86_64-w64-mingw32-gcc",
             "-DCMAKE_CXX_COMPILER=" + "x86_64-w64-mingw32-g++",
             "-DCANGJIE_HOME=" + os.environ["CANGJIE_HOME"],
-        ] + [arg for arg in args.cmake_args if arg != "--"]
+        ] + [arg for arg in args.cmake_args if arg != "--"] + ["-DJSON_ROOT=" + args.sources["json"]]
 
     return [
         "-DCMAKE_BUILD_TYPE=" + args.build_type.value,
         "-DCOVERAGE_FLAG=" + bool_to_opt(args.code_coverage),
-    ] + [arg for arg in args.cmake_args if arg != "--"]
+    ] + [arg for arg in args.cmake_args if arg != "--"] + ["-DJSON_ROOT=" + args.sources["json"]]
 
 
 def build(args):
@@ -145,68 +180,31 @@ def build(args):
         LOG.error(
             "please specify the build type. Supported options are: release and debug."
         )
-        return
+        raise ValueError("build type is required")
 
     check_compiler(args)
-    prepare_build()
+    args.sources = prepare_build(args)
+    if any(arg.startswith("-DCMAKE_BUILD_TYPE=") for arg in args.cmake_args):
+        raise ValueError("select build type with -t, not a CMake override")
     """cjlint build"""
     LOG.info("begin build...\n")
 
-    """build windows executables from Linux"""
-    if args.target == "windows-x86_64":
-        os.makedirs(CMAKE_BUILD_DIR)
-        output = subprocess.Popen(
-            ["cmake", HOME_DIR] + generate_cmake_defs(args),
-            cwd=CMAKE_BUILD_DIR,
-            stdout=PIPE,
-        )
-        log_output(output)
-        output = subprocess.Popen(
-            ["make", "-j" + str(args.jobs)], cwd=CMAKE_BUILD_DIR, stdout=PIPE
-        )
-        log_output(output)
-        LOG.info("end build\n")
-        return
-
-    if os.path.exists(CMAKE_BUILD_DIR):
-        if IS_WINDOWS:
-            output = subprocess.Popen(
-                ["mingw32-make", "-j" + str(args.jobs)],
-                cwd=CMAKE_BUILD_DIR,
-                stdout=PIPE,
-            )
-        else:
-            output = subprocess.Popen(["ninja", "-j" + str(args.jobs)], cwd=CMAKE_BUILD_DIR, stdout=PIPE)
-        log_output(output)
-    else:
-        os.makedirs(CMAKE_BUILD_DIR)
-        if IS_WINDOWS:
-            generator = "MinGW Makefiles"
-        else:
-            generator = "Ninja"
-        output = subprocess.Popen(
-            ["cmake", HOME_DIR, "-G", generator] + generate_cmake_defs(args),
-            cwd=CMAKE_BUILD_DIR,
-            stdout=PIPE,
-        )
-        log_output(output)
-        if IS_WINDOWS:
-            output = subprocess.Popen(
-                ["mingw32-make", "-j" + str(args.jobs)],
-                cwd=CMAKE_BUILD_DIR,
-                stdout=PIPE,
-            )
-        else:
-            output = subprocess.Popen(["ninja", "-j" + str(args.jobs)], cwd=CMAKE_BUILD_DIR, stdout=PIPE)
-        log_output(output)
+    os.makedirs(CMAKE_BUILD_DIR, exist_ok=True)
+    generator = "MinGW Makefiles" if IS_WINDOWS else ("Unix Makefiles" if args.target == "windows-x86_64" else "Ninja")
+    output = subprocess.Popen(["cmake", HOME_DIR, "-G", generator] + generate_cmake_defs(args),
+                              cwd=CMAKE_BUILD_DIR, stdout=PIPE)
+    log_output(output)
+    output = subprocess.Popen(["cmake", "--build", CMAKE_BUILD_DIR, "--parallel", str(args.jobs)], stdout=PIPE)
+    log_output(output)
     LOG.info("end build\n")
+
 
 
 def clean(args):
     """clean build outputs and logs"""
     LOG.info("begin clean...\n")
     output_dirs = [
-        "build/build",
+        "build/build", "dist"
     ]
     for file_path in output_dirs:
         abs_file_path = os.path.join(HOME_DIR, file_path)
@@ -286,7 +284,7 @@ def main():
     parser_build.add_argument(
         "-j",
         "--jobs",
-        type=int,
+        type=positive_jobs,
         default=THREADS_NUM,
         help="number of parallel jobs to run")
     parser_build.add_argument(
@@ -294,6 +292,8 @@ def main():
         nargs=argparse.REMAINDER,
         help="other arguments directly passed to CMake, " "please pass it after a '--'",
     )
+    parser_build.add_argument("--dependencies", required=True,
+                              help="JSON mapping dependency name to fixed repo, commit and checkout path")
     parser_build.set_defaults(func=build)
 
     parser_install = subparsers.add_parser("install", help="install targets")
@@ -317,4 +317,10 @@ def main():
 if __name__ == "__main__":
     LOG = init_log("root")
     os.environ["LANG"] = "C.UTF-8"
-    main()
+    try:
+        main()
+    except subprocess.CalledProcessError as error:
+        sys.exit(error.returncode if error.returncode > 0 else 128 - error.returncode)
+    except (OSError, ValueError, KeyError) as error:
+        LOG.error("%s", error)
+        sys.exit(1)

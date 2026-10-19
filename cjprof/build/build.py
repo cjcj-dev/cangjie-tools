@@ -8,6 +8,8 @@
 
 """Cangjie Profile build entry"""
 import argparse
+import json
+import re
 import logging
 import multiprocessing
 import os
@@ -19,7 +21,8 @@ from enum import Enum
 from logging.handlers import TimedRotatingFileHandler
 from subprocess import PIPE
 
-THREADS_NUM = multiprocessing.cpu_count() // 2
+THREADS_NUM = os.environ.get("CANGJIE_BUILD_JOBS") or (
+    len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else multiprocessing.cpu_count())
 FAIL_CASE_NUM = 0
 PASS_CASE_NUM = 0
 
@@ -40,57 +43,51 @@ def run_jni_script(args):
     cmd = [sys.executable, jni_script_file]
     cmd.extend(args)
     
-    try:
-        result = subprocess.run(
-            cmd,
-            check=True,
-            capture_output=True,
-            text=True,
-            cwd=None
-        )
-        print(result.stdout)
-        
-    except subprocess.CalledProcessError as e:
-        print(f"return code: {e.returncode}")
-        print(f"error: {e.stderr}")
-    except FileNotFoundError:
-        print("cannot find build.py")
+    # Inherit stdout/stderr and the child's actual failure; never accept old dist.
+    subprocess.run(cmd, check=True)
 
-def download_boundscheck():
-    cmd = ["git", "clone", "-b", "OpenHarmony-v6.0-Release", "https://gitcode.com/openharmony/third_party_bounds_checking_function.git", "boundscheck"]
-    output = subprocess.Popen(cmd, cwd=THIRDPARTY_DIR, stdout=PIPE)
-    for line in output.stdout:
-        print(line.decode("ascii", "ignore").rstrip())
+DEPENDENCIES = {"json": "include/nlohmann/json.hpp", "httplib": "httplib.h",
+                "runtime": "runtime/src/Demangler/CMakeLists.txt", "bounds": "include/securec.h"}
 
-def download_runtime():
-    cmd = ["git", "clone", "-b", "main", "https://gitcode.com/Cangjie/cangjie_runtime.git", "runtime"]
-    output = subprocess.Popen(cmd, cwd=THIRDPARTY_DIR, stdout=PIPE)
-    for line in output.stdout:
-        print(line.decode("ascii", "ignore").rstrip())
+def prepare_build(args):
+    """Resolve caller-selected fixed Git sources on both first and warm builds."""
+    with open(args.dependencies, encoding="utf-8") as source:
+        inputs = json.load(source)
+    selected = {}
+    for name, sentinel in DEPENDENCIES.items():
+        item = inputs[name]
+        repo, commit = item["repo"], item["commit"]
+        source = os.path.realpath(item["path"])
+        if not repo or not re.fullmatch(r"[0-9a-f]{40}", commit):
+            raise ValueError(f"{name}: expected repo and complete fixed commit")
+        if not os.path.exists(source):
+            subprocess.run(["git", "init", source], check=True)
+            subprocess.run(["git", "-C", source, "remote", "add", "origin", repo], check=True)
+        def query(*command):
+            return subprocess.check_output(["git", "-C", source, *command], text=True).strip()
+        if os.path.realpath(query("rev-parse", "--show-toplevel")) != source:
+            raise ValueError(f"{name}: expected independent source checkout: {source}")
+        if query("remote", "get-url", "origin") != repo:
+            raise ValueError(f"{name}: origin differs from selected repo: {source}")
+        head = subprocess.run(["git", "-C", source, "rev-parse", "--verify", "HEAD"],
+                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        if head.returncode:
+            subprocess.run(["git", "-C", source, "fetch", "--depth=1", "origin", commit], check=True)
+            subprocess.run(["git", "-C", source, "checkout", "--detach", commit], check=True)
+        if query("rev-parse", "HEAD") != commit or query("status", "--porcelain", "--untracked-files=no"):
+            raise ValueError(f"{name}: preserve mismatched/modified checkout; select a clean {commit} source")
+        if not os.path.isfile(os.path.join(source, sentinel)):
+            raise FileNotFoundError(f"{name}: missing {sentinel} in selected {source}")
+        selected[name] = source
+        LOG.info("dependency %s repo=%s commit=%s path=%s", name, repo, commit, source)
+    return selected
 
-def download_json():
-    cmd = ["git", "clone", "-b", "OpenHarmony-v6.0-Release", "--depth=1", "https://gitcode.com/openharmony/third_party_json.git", "third_party_json"]
-    output = subprocess.Popen(cmd, cwd=THIRDPARTY_DIR, stdout=PIPE)
-    for line in output.stdout:
-        print(line.decode("ascii", "ignore").rstrip())
 
-def download_httplib():
-    cmd = ["git", "clone", "-b", "master", "--depth=1", "https://gitcode.com/GitHub_Trending/cp/cpp-httplib.git", "cpp-httplib"]
-    output = subprocess.Popen(cmd, cwd=THIRDPARTY_DIR, stdout=PIPE)
-    for line in output.stdout:
-        print(line.decode("ascii", "ignore").rstrip())
-
-def prepare_build():
-    if not os.path.exists(THIRDPARTY_DIR):
-        os.makedirs(THIRDPARTY_DIR)
-    if not os.path.exists(os.path.join(THIRDPARTY_DIR, "runtime")):
-        download_runtime()
-    if not os.path.exists(os.path.join(THIRDPARTY_DIR, "boundscheck")):
-        download_boundscheck()
-    if not os.path.exists(os.path.join(THIRDPARTY_DIR, "third_party_json")):
-        download_json()
-    if not os.path.exists(os.path.join(THIRDPARTY_DIR, "cpp-httplib")):
-        download_httplib()
+def positive_jobs(value):
+    jobs = int(value)
+    if jobs < 1:
+        raise argparse.ArgumentTypeError("jobs must be positive")
+    return jobs
 
 def setup_compiler():
     if not IS_WINDOWS:
@@ -127,7 +124,7 @@ def log_output(output):
             returncode = output.returncode
             if returncode != 0:
                 LOG.error("build error: %d!\n", returncode)
-                sys.exit(1)
+                sys.exit(returncode if returncode > 0 else 128 - returncode)
             break
         try:
             LOG.info(line.decode("ascii", "ignore").rstrip())
@@ -165,6 +162,13 @@ def generate_cmake_defs(args):
         return "ON" if value else "OFF"
 
     build_type = BuildType.debug.value if args.code_coverage else args.build_type.value
+    dependency_defs = [
+        "-DCJPROF_JSON_SOURCE=" + args.sources["json"],
+        "-DCJPROF_HTTPLIB_SOURCE=" + args.sources["httplib"],
+        "-DCJPROF_RUNTIME_SOURCE=" + args.sources["runtime"],
+        "-DCJPROF_BOUNDS_SOURCE=" + args.sources["bounds"],
+        "-DCJPROF_TARGET=" + args.target,
+    ]
     coverage_defs = []
     if args.code_coverage:
         coverage_defs = [
@@ -177,7 +181,7 @@ def generate_cmake_defs(args):
     # original semantics (gcov instrumentation + force Debug only); opt into
     # the test target explicitly when you want it built (e.g. for coverage
     # collection). The tests are NOT run here; run them via ctest later.
-    test_defs = []
+    test_defs = ["-DBUILD_TESTING=OFF"]
     if getattr(args, "build_test", False):
         test_defs.append("-DBUILD_TESTING=ON")
 
@@ -189,24 +193,24 @@ def generate_cmake_defs(args):
             "-DCMAKE_CXX_COMPILER=" + "x86_64-w64-mingw32-g++",
             "-DSTRIP_LIB_PREFIX=" + "ON",
             "-DUSE_CXX17_FEATURES=" + "ON",
-        ] + coverage_defs + test_defs + [arg for arg in args.cmake_args if arg != "--"]
+        ] + coverage_defs + test_defs + [arg for arg in args.cmake_args if arg != "--"] + dependency_defs
 
     if IS_MAC:
         return [
             "-DCMAKE_BUILD_TYPE=" + build_type,
             "-DUSE_CXX17_FEATURES=" + "ON",
-        ] + coverage_defs + test_defs + [arg for arg in args.cmake_args if arg != "--"]
+        ] + coverage_defs + test_defs + [arg for arg in args.cmake_args if arg != "--"] + dependency_defs
 
     if IS_WINDOWS:
         return [
             "-DCMAKE_BUILD_TYPE=" + build_type,
             "-DSTRIP_LIB_PREFIX=" + "ON",
             "-DUSE_CXX17_FEATURES=" + "ON",
-        ] + coverage_defs + test_defs + [arg for arg in args.cmake_args if arg != "--"]
+        ] + coverage_defs + test_defs + [arg for arg in args.cmake_args if arg != "--"] + dependency_defs
 
     return [
         "-DCMAKE_BUILD_TYPE=" + build_type,
-    ] + coverage_defs + test_defs + [arg for arg in args.cmake_args if arg != "--"]
+    ] + coverage_defs + test_defs + [arg for arg in args.cmake_args if arg != "--"] + dependency_defs
 
 
 def build(args):
@@ -216,70 +220,33 @@ def build(args):
         LOG.error(
             "please specify the build type. Supported options are: release and debug."
         )
-        return
+        raise ValueError("build type is required")
 
-    prepare_build()
+    setup_compiler()
+    args.sources = prepare_build(args)
+    if any(arg.startswith(("-DCMAKE_BUILD_TYPE=", "-DCJPROF_TARGET=")) for arg in args.cmake_args):
+        raise ValueError("select build type/target with -t/--target, not CMake overrides")
+    # A failed/skipped JNI rebuild must not leave an older installable library.
+    jni_root = os.path.join(HOME_DIR, "bridge", "jni")
+    for name in ("libcjprof-jni.so", "libcjprof-jni.dylib", "cjprof-jni.dll"):
+        for directory in ("build", "dist"):
+            stale = os.path.join(jni_root, directory, name)
+            if os.path.isfile(stale):
+                os.remove(stale)
     """cjprof build"""
     LOG.info("begin build...\n")
 
-    """build windows executables from Linux"""
-    if args.target == "windows-x86_64":
-        if not os.path.exists(CMAKE_BUILD_DIR):
-            os.makedirs(CMAKE_BUILD_DIR)
-        output = subprocess.Popen(
-            ["cmake", HOME_DIR] + generate_cmake_defs(args),
-            cwd=CMAKE_BUILD_DIR,
-            stdout=PIPE,
-        )
-        log_output(output)
-        output = subprocess.Popen(
-            ["make", "-j" + str(args.jobs)], cwd=CMAKE_BUILD_DIR, stdout=PIPE
-        )
-        log_output(output)
-        if not args.skip_jni:
-            run_jni_script(["build", "-t", str(args.build_type), "--target", str(args.target)])
-        else:
-            LOG.info("skipping JNI build (--skip-jni)\n")
-        LOG.info("end build\n")
-        return
-
-    if os.path.exists(CMAKE_BUILD_DIR):
-        if IS_WINDOWS:
-            output = subprocess.Popen(
-                ["mingw32-make", "-j" + str(args.jobs)],
-                cwd=CMAKE_BUILD_DIR,
-                stdout=PIPE,
-            )
-        else:
-            output = subprocess.Popen(["ninja", "-j" + str(args.jobs)], cwd=CMAKE_BUILD_DIR, stdout=PIPE)
-        log_output(output)
-    else:
-        os.makedirs(CMAKE_BUILD_DIR)
-        if IS_WINDOWS:
-            generator = "MinGW Makefiles"
-        else:
-            generator = "Ninja"
-        output = subprocess.Popen(
-            ["cmake", HOME_DIR, "-G", generator] + generate_cmake_defs(args),
-            cwd=CMAKE_BUILD_DIR,
-            stdout=PIPE,
-        )
-        log_output(output)
-        if IS_WINDOWS:
-            output = subprocess.Popen(
-                ["mingw32-make", "-j" + str(args.jobs)],
-                cwd=CMAKE_BUILD_DIR,
-                stdout=PIPE,
-            )
-        else:
-            output = subprocess.Popen(["ninja", "-j" + str(args.jobs)], cwd=CMAKE_BUILD_DIR, stdout=PIPE)
-        log_output(output)
+    os.makedirs(CMAKE_BUILD_DIR, exist_ok=True)
+    generator = "MinGW Makefiles" if IS_WINDOWS else ("Unix Makefiles" if args.target == "windows-x86_64" else "Ninja")
+    output = subprocess.Popen(["cmake", HOME_DIR, "-G", generator] + generate_cmake_defs(args),
+                              cwd=CMAKE_BUILD_DIR, stdout=PIPE)
+    log_output(output)
+    output = subprocess.Popen(["cmake", "--build", CMAKE_BUILD_DIR, "--parallel", str(args.jobs)], stdout=PIPE)
+    log_output(output)
     if getattr(args, "build_test", False):
         LOG.info("building gtest target cjprof_gtest (--build-test)\n")
-        make_tool = "mingw32-make" if IS_WINDOWS else "ninja"
         output = subprocess.Popen(
-            [make_tool, "-j" + str(args.jobs), "cjprof_gtest"],
-            cwd=CMAKE_BUILD_DIR,
+            ["cmake", "--build", CMAKE_BUILD_DIR, "--parallel", str(args.jobs), "--target", "cjprof_gtest"],
             stdout=PIPE,
         )
         log_output(output)
@@ -288,7 +255,7 @@ def build(args):
         else:
             LOG.info("cjprof_gtest built — run via: ctest --test-dir %s\n" % CMAKE_BUILD_DIR)
     if not args.skip_jni:
-        run_jni_script(["build", "-t", str(args.build_type)])
+        run_jni_script(["build", "-t", str(args.build_type), "--target", args.target, "--jobs", str(args.jobs)])
     else:
         LOG.info("skipping JNI build (--skip-jni)\n")
     LOG.info("end build\n")
@@ -298,7 +265,7 @@ def clean(args):
     """clean build outputs and logs"""
     LOG.info("begin clean...\n")
     output_dirs = [
-        "build/build"
+        "build/build", "dist"
     ]
     for file_path in output_dirs:
         abs_file_path = os.path.join(HOME_DIR, file_path)
@@ -317,16 +284,26 @@ def install(args):
     """install targets"""
     LOG.info("begin install targets...")
     install_path = args.install_prefix if args.install_prefix else CMAKE_OUTPUT_DIR
+    # Use the actual native CMake configuration. No default Debug fallback and
+    # no copy from a stale JNI dist if this validation/child fails.
+    cache = {}
+    with open(os.path.join(CMAKE_BUILD_DIR, "CMakeCache.txt"), encoding="utf-8") as source:
+        for line in source:
+            if not line.startswith(("#", "//")) and ":" in line and "=" in line:
+                key, value = line.rstrip().split("=", 1)
+                cache[key.split(":", 1)[0]] = value
+    build_type, target = cache["CMAKE_BUILD_TYPE"], cache["CJPROF_TARGET"]
+    if build_type not in ("Debug", "Release") or target not in ("native", "windows-x86_64"):
+        raise ValueError("Unsupported native build configuration; build before install")
+    run_jni_script(["install", "-t", build_type.lower(), "--target", target])
     output = subprocess.Popen(
-        ["cmake", "--install", "build", "--prefix", install_path],
+        ["cmake", "--install", "build", "--config", build_type, "--prefix", install_path],
         cwd=BUILD_DIR,
         stdout=PIPE,
     )
     log_output(output)
     if output.returncode != 0:
         LOG.fatal("install failed")
-    run_jni_script(["install"])
-
     shutil.copytree(os.path.join(BUILD_DIR, "..", "bridge", "jni", "dist"), os.path.join(install_path, "lib"), dirs_exist_ok=True)
     LOG.info("end install targets...")
 
@@ -381,7 +358,7 @@ def main():
     parser_build.add_argument(
         "-j",
         "--jobs",
-        type=int,
+        type=positive_jobs,
         default=THREADS_NUM,
         help="number of parallel jobs to run")
     parser_build.add_argument(
@@ -402,6 +379,8 @@ def main():
         nargs=argparse.REMAINDER,
         help="other arguments directly passed to CMake, " "please pass it after a '--'",
     )
+    parser_build.add_argument("--dependencies", required=True,
+                              help="JSON mapping dependency name to fixed repo, commit and checkout path")
     parser_build.set_defaults(func=build)
 
     parser_install = subparsers.add_parser("install", help="install targets")
@@ -429,5 +408,10 @@ def main():
 if __name__ == "__main__":
     LOG = init_log("root")
     os.environ["LANG"] = "C.UTF-8"
-    setup_compiler()
-    main()
+    try:
+        main()
+    except subprocess.CalledProcessError as error:
+        sys.exit(error.returncode if error.returncode > 0 else 128 - error.returncode)
+    except (OSError, ValueError, KeyError) as error:
+        LOG.error("%s", error)
+        sys.exit(1)

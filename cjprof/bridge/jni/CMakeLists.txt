@@ -6,6 +6,7 @@
 
 cmake_minimum_required(VERSION 3.10)
 project(cjprof-jni)
+set(CJPROF_TARGET "native" CACHE STRING "Selected producer target")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -23,6 +24,9 @@ find_package(JNI REQUIRED)
 message(STATUS "Found JNI: ${JNI_INCLUDE_DIRS}")
 
 include_directories(${JNI_INCLUDE_DIRS})
+if(WIN32 AND NOT CMAKE_HOST_WIN32)
+    include_directories(BEFORE "${CMAKE_SOURCE_DIR}/cross_win")
+endif()
 include_directories(${CMAKE_SOURCE_DIR})
 include_directories(../../include)
 
@@ -46,9 +50,8 @@ set_target_properties(cjprof-jni PROPERTIES
     OUTPUT_NAME "cjprof-jni"
 )
 
-find_library(CJPROF_LIBRARY NAMES cjprof)
-if(CJPROF_LIBRARY)
+if(IS_ABSOLUTE "${CJPROF_LIBRARY}" AND EXISTS "${CJPROF_LIBRARY}")
     target_link_libraries(cjprof-jni ${CJPROF_LIBRARY})
 else()
-    message(WARNING "cjprof library not found, please ensure it is in system library path")
+    message(FATAL_ERROR "CJPROF_LIBRARY must be the exact built parent library")
 endif()
