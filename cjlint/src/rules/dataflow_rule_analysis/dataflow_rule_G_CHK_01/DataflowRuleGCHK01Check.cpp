@@ -204,9 +204,9 @@ void DataflowRuleGCHK01Check::CheckApplyUser(CHIR::Expression* user, CHIR::Value
         CheckApplyInUsers<CHIR::Apply>(newApply, result);
         return;
     }
-    if (user->GetExprKind() == CHIR::ExprKind::APPLY_WITH_EXCEPTION) {
-        auto newApply = StaticCast<CHIR::ApplyWithException*>(user);
-        CheckApplyInUsers<CHIR::ApplyWithException>(newApply, result);
+    if (user->GetExprKind() == CHIR::ExprKind::TRY_APPLY) {
+        auto newApply = StaticCast<CHIR::TryApply*>(user);
+        CheckApplyInUsers<CHIR::TryApply>(newApply, result);
         return;
     }
     if (user->GetExprKind() == CHIR::ExprKind::INVOKE) {
@@ -219,9 +219,9 @@ void DataflowRuleGCHK01Check::CheckApplyUser(CHIR::Expression* user, CHIR::Value
         CheckInvokeInUsers<CHIR::InvokeStatic>(invoke, result);
         return;
     }
-    if (user->GetExprKind() == CHIR::ExprKind::INVOKE_WITH_EXCEPTION) {
-        auto invoke = StaticCast<CHIR::InvokeWithException*>(user);
-        CheckInvokeInUsers<CHIR::InvokeWithException>(invoke, result);
+    if (user->GetExprKind() == CHIR::ExprKind::TRY_INVOKE) {
+        auto invoke = StaticCast<CHIR::TryInvoke*>(user);
+        CheckInvokeInUsers<CHIR::TryInvoke>(invoke, result);
         return;
     }
 }
@@ -355,7 +355,7 @@ void DataflowRuleGCHK01Check::CheckStoreElementRef(CHIR::StoreElementRef* storeE
     auto base = storeElementRef->GetValue();
     auto identifier = GetArgName(base);
     if (taintedVars.count(identifier) > 0) {
-        taintedVars.insert(GetArgName(storeElementRef->GetLocation()));
+        taintedVars.insert(GetArgName(storeElementRef->GetBase()));
     }
 }
 
@@ -397,15 +397,13 @@ void DataflowRuleGCHK01Check::CheckFuncBody(CHIR::Block& entryBlock)
                     CheckStore(load, taintedVars);
                     continue;
                 }
-                if (expr->GetExprKind() == CHIR::ExprKind::TYPECAST) {
-                    auto typeCast = StaticCast<CHIR::TypeCast*>(expr);
+                if (auto typeCast = DynamicCast<CHIR::TypeCast*>(expr)) {
                     CheckExpr(typeCast->GetSourceValue(), typeCast->GetResult(), taintedVars);
-                    continue;
-                }
-                if (expr->GetExprKind() == CHIR::ExprKind::BOX) {
-                    auto box = StaticCast<CHIR::Box*>(expr);
-                    CheckExpr(box->GetSourceValue(), box->GetResult(), taintedVars);
-                    continue;
+                    // TryNumericCast also ends the block: carry the state to its
+                    // successors below instead of skipping control flow.
+                    if (!expr->IsTerminator()) {
+                        continue;
+                    }
                 }
                 if (expr->GetExprKind() == CHIR::ExprKind::TUPLE) {
                     auto tuple = StaticCast<CHIR::Tuple*>(expr);
@@ -423,9 +421,9 @@ void DataflowRuleGCHK01Check::CheckFuncBody(CHIR::Block& entryBlock)
                     continue;
                 }
                 if (expr->IsTerminator()) {
-                    if (expr->GetExprKind() == CHIR::ExprKind::APPLY_WITH_EXCEPTION) {
-                        auto applyWithException = StaticCast<CHIR::ApplyWithException*>(expr);
-                        CheckApply<CHIR::ApplyWithException>(applyWithException, taintedVars);
+                    if (expr->GetExprKind() == CHIR::ExprKind::TRY_APPLY) {
+                        auto applyWithException = StaticCast<CHIR::TryApply*>(expr);
+                        CheckApply<CHIR::TryApply>(applyWithException, taintedVars);
                     }
                     for (auto newblock : expr->GetSuccessors()) {
                         visitBlock(newblock, taintedVars);

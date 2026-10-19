@@ -28,7 +28,9 @@ function compile(unit,label){
  console.log(name+' rc='+p.status);return p;
 }
 function green(unit,label){assert.equal(compile(unit,label).status,0,unit.relative);}
-for(const unit of units)green(unit,'candidate');
+const failures=[];
+for(const unit of units)if(compile(unit,'candidate').status!==0)failures.push(unit.relative);
+assert.deepEqual(failures,[],'complete consumer compile failures');
 const common=units.find(u=>u.relative==='src/common/CommonFunc.cpp'),checker=units.find(u=>u.relative==='src/checker/Checker.cpp');
 function cut(relative,from,to,target,control,diagnostic,label){
  const f=path.join(c.source,relative),before=fs.readFileSync(f,'utf8');assert(before.includes(from));

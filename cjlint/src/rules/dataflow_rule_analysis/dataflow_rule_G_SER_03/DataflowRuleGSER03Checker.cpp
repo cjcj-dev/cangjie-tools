@@ -219,8 +219,7 @@ void DataflowRuleGSER03Checker::SetSerInRetToFieldSerMap(
         auto load = StaticCast<CHIR::Load*>(localVarExpr);
         SetSerInRetToFieldSerMapHelper(load, typeStr, serTypeMap);
     }
-    if (localVar && localVarExpr && localVarExpr->GetExprKind() == CHIR::ExprKind::TYPECAST) {
-        auto typecast = StaticCast<CHIR::TypeCast*>(localVarExpr);
+    if (auto typecast = DynamicCast<CHIR::TypeCast*>(localVarExpr)) {
         localVar = DynamicCast<CHIR::LocalVar*>(typecast->GetSourceValue());
         if (!localVar) {
             return;
