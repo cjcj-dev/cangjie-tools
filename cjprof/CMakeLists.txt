@@ -6,13 +6,16 @@
 
 cmake_minimum_required(VERSION 3.10)
 
+# Preserve an explicit user/cache Release selection while keeping the original
+# default for a fresh tree.
+set(CMAKE_CXX_FLAGS_RELEASE "-D_FORTIFY_SOURCE=2 -O2" CACHE STRING "Release C++ flags")
 project("cjprof")
+include(cmake/Coverage.cmake)
 include(GNUInstallDirs)
 set(CJPROF_TARGET "native" CACHE STRING "Selected producer target")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CJPROF_VERSION_STR "1.2.0-beta.rc2")
-set(CMAKE_CXX_FLAGS_RELEASE "-D_FORTIFY_SOURCE=2 -O2")
 set(STRIP_FLAG "-s")
 
 option(STRIP_LIB_PREFIX "Strip 'lib' prefix" OFF)
@@ -35,10 +38,10 @@ if (APPLE)
 endif ()
 
 if(CMAKE_BUILD_TYPE MATCHES Release)
-    set(CMAKE_EXE_LINKER_FLAGS "${LINK_FLAGS} ${STRIP_FLAG}")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${LINK_FLAGS} ${STRIP_FLAG}")
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${LINK_FLAGS} ${STRIP_FLAG}")
 else()
-    set(CMAKE_EXE_LINKER_FLAGS "${LINK_FLAGS}")
+    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${LINK_FLAGS}")
     set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} ${LINK_FLAGS}")
 endif()
 

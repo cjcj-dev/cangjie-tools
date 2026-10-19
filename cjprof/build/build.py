@@ -164,6 +164,36 @@ def init_log(name):
     return log
 
 
+def read_native_cache():
+    cache = {}
+    with open(os.path.join(CMAKE_BUILD_DIR, "CMakeCache.txt"), encoding="utf-8") as source:
+        for line in source:
+            if not line.startswith(("#", "//")) and ":" in line and "=" in line:
+                key, value = line.rstrip("\r\n").split("=", 1)
+                cache[key.split(":", 1)[0]] = value
+    return cache
+
+
+def legacy_coverage_reset():
+    """Migrate only exact flag values written by the old public coverage entry."""
+    if not os.path.isfile(os.path.join(CMAKE_BUILD_DIR, "CMakeCache.txt")):
+        return []
+    cache = read_native_cache()
+    if "CJPROF_CODE_COVERAGE" in cache:
+        return []
+    legacy = {"CMAKE_C_FLAGS": "-fprofile-arcs -ftest-coverage",
+              "CMAKE_CXX_FLAGS": "-fprofile-arcs -ftest-coverage -DCOVERAGE_BUILD"}
+    reset = []
+    for key, value in legacy.items():
+        if cache.get(key) == value:
+            LOG.info("Migrating legacy coverage %s; CMake reinitializes user environment flags", key)
+            # Keep all other values/entries. Explicit caller -D flags follow
+            # these unsets, retaining even an intentional identical selection.
+            reset.extend(["-U", key])
+    return reset
+
+
+
 def generate_cmake_defs(args):
     """convert args to cmake defs"""
 
@@ -178,12 +208,7 @@ def generate_cmake_defs(args):
         "-DCJPROF_BOUNDS_SOURCE=" + args.sources["bounds"],
         "-DCJPROF_TARGET=" + args.target,
     ]
-    coverage_defs = []
-    if args.code_coverage:
-        coverage_defs = [
-            "-DCMAKE_CXX_FLAGS=-fprofile-arcs -ftest-coverage -DCOVERAGE_BUILD",
-            "-DCMAKE_C_FLAGS=-fprofile-arcs -ftest-coverage",
-        ]
+    coverage_defs = ["-DCJPROF_CODE_COVERAGE=" + bool_to_opt(args.code_coverage)]
 
     # --build-test enables the gtest-based C++ API tests (tests/ subdirectory).
     # It is independent of --code-coverage so the coverage build keeps its
@@ -202,24 +227,24 @@ def generate_cmake_defs(args):
             "-DCMAKE_CXX_COMPILER=" + "x86_64-w64-mingw32-g++",
             "-DSTRIP_LIB_PREFIX=" + "ON",
             "-DUSE_CXX17_FEATURES=" + "ON",
-        ] + coverage_defs + test_defs + [arg for arg in args.cmake_args if arg != "--"] + dependency_defs
+        ] + test_defs + [arg for arg in args.cmake_args if arg != "--"] + dependency_defs + coverage_defs
 
     if IS_MAC:
         return [
             "-DCMAKE_BUILD_TYPE=" + build_type,
             "-DUSE_CXX17_FEATURES=" + "ON",
-        ] + coverage_defs + test_defs + [arg for arg in args.cmake_args if arg != "--"] + dependency_defs
+        ] + test_defs + [arg for arg in args.cmake_args if arg != "--"] + dependency_defs + coverage_defs
 
     if IS_WINDOWS:
         return [
             "-DCMAKE_BUILD_TYPE=" + build_type,
             "-DSTRIP_LIB_PREFIX=" + "ON",
             "-DUSE_CXX17_FEATURES=" + "ON",
-        ] + coverage_defs + test_defs + [arg for arg in args.cmake_args if arg != "--"] + dependency_defs
+        ] + test_defs + [arg for arg in args.cmake_args if arg != "--"] + dependency_defs + coverage_defs
 
     return [
         "-DCMAKE_BUILD_TYPE=" + build_type,
-    ] + coverage_defs + test_defs + [arg for arg in args.cmake_args if arg != "--"] + dependency_defs
+    ] + test_defs + [arg for arg in args.cmake_args if arg != "--"] + dependency_defs + coverage_defs
 
 
 def build(args):
@@ -233,8 +258,8 @@ def build(args):
 
     setup_compiler()
     args.sources = prepare_build(args)
-    if any(re.match(r"-D(CMAKE_BUILD_TYPE|CJPROF_TARGET)(:[^=]+)?=", arg) for arg in args.cmake_args):
-        raise ValueError("select build type/target with -t/--target, not CMake overrides")
+    if any(re.match(r"-D(CMAKE_BUILD_TYPE|CJPROF_TARGET|CJPROF_CODE_COVERAGE)(:[^=]+)?=", arg) for arg in args.cmake_args):
+        raise ValueError("select build type/target/coverage with -t/--target/--code-coverage, not CMake overrides")
     # A failed/skipped JNI rebuild must not leave an older installable library.
     jni_root = os.path.join(HOME_DIR, "bridge", "jni")
     for name in ("libcjprof-jni.so", "libcjprof-jni.dylib", "cjprof-jni.dll"):
@@ -247,7 +272,7 @@ def build(args):
 
     os.makedirs(CMAKE_BUILD_DIR, exist_ok=True)
     generator = "MinGW Makefiles" if IS_WINDOWS else ("Unix Makefiles" if args.target == "windows-x86_64" else "Ninja")
-    output = subprocess.Popen(["cmake", HOME_DIR, "-G", generator] + generate_cmake_defs(args),
+    output = subprocess.Popen(["cmake", HOME_DIR, "-G", generator] + legacy_coverage_reset() + generate_cmake_defs(args),
                               cwd=CMAKE_BUILD_DIR, stdout=PIPE)
     log_output(output)
     output = subprocess.Popen(["cmake", "--build", CMAKE_BUILD_DIR, "--parallel", str(args.jobs)], stdout=PIPE)
@@ -264,7 +289,13 @@ def build(args):
         else:
             LOG.info("cjprof_gtest built — run via: ctest --test-dir %s\n" % CMAKE_BUILD_DIR)
     if not args.skip_jni:
-        run_jni_script(["build", "-t", str(args.build_type), "--target", args.target, "--jobs", str(args.jobs)])
+        cache = read_native_cache()
+        # Forward the selected user flags, not directory-local hardening/coverage
+        # additions. JNI adds its own option-controlled instrumentation once.
+        flags = ["-D" + key + ":STRING=" + value for key, value in cache.items()
+                 if re.fullmatch(r"CMAKE_(C|CXX|EXE_LINKER|SHARED_LINKER|MODULE_LINKER)_FLAGS(_[A-Z0-9_]+)?", key)]
+        run_jni_script(["build", "-t", str(args.build_type), "--target", args.target, "--jobs", str(args.jobs)]
+                       + (["--code-coverage"] if args.code_coverage else []) + ["--"] + flags)
     else:
         LOG.info("skipping JNI build (--skip-jni)\n")
     LOG.info("end build\n")
@@ -295,16 +326,12 @@ def install(args):
     install_path = os.path.abspath(args.install_prefix) if args.install_prefix else CMAKE_OUTPUT_DIR
     # Use the actual native CMake configuration. No default Debug fallback and
     # no copy from a stale JNI dist if this validation/child fails.
-    cache = {}
-    with open(os.path.join(CMAKE_BUILD_DIR, "CMakeCache.txt"), encoding="utf-8") as source:
-        for line in source:
-            if not line.startswith(("#", "//")) and ":" in line and "=" in line:
-                key, value = line.rstrip().split("=", 1)
-                cache[key.split(":", 1)[0]] = value
+    cache = read_native_cache()
     build_type, target = cache["CMAKE_BUILD_TYPE"], cache["CJPROF_TARGET"]
     if build_type not in ("Debug", "Release") or target not in ("native", "windows-x86_64"):
         raise ValueError("Unsupported native build configuration; build before install")
-    run_jni_script(["install", "-t", build_type.lower(), "--target", target])
+    run_jni_script(["install", "-t", build_type.lower(), "--target", target]
+                   + (["--code-coverage"] if cache.get("CJPROF_CODE_COVERAGE") == "ON" else []))
     output = subprocess.Popen(
         ["cmake", "--install", "build", "--config", build_type, "--prefix", install_path],
         cwd=BUILD_DIR,

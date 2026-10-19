@@ -6,6 +6,7 @@
 
 cmake_minimum_required(VERSION 3.10)
 project(cjprof-jni)
+include(../../cmake/Coverage.cmake)
 set(CJPROF_TARGET "native" CACHE STRING "Selected producer target")
 
 set(CMAKE_CXX_STANDARD 17)

@@ -8,6 +8,7 @@
 
 import argparse
 import os
+import re
 import sys
 import shutil
 import subprocess
@@ -47,8 +48,8 @@ def clean():
     echo_info("Clean completed")
 
 
-def build_jni(debug=False, target="native", jobs=1, prof_library=None):
-    build_type = "Debug" if debug else "Release"
+def build_jni(debug=False, target="native", jobs=1, prof_library=None, code_coverage=False, cmake_flags=()):
+    build_type = "Debug" if debug or code_coverage else "Release"
     echo_info(f"Building JNI library ({build_type})...")
 
     BUILD_DIR.mkdir(exist_ok=True)
@@ -65,6 +66,12 @@ def build_jni(debug=False, target="native", jobs=1, prof_library=None):
         prof_library = default_prof_library(target)
     if not Path(prof_library).is_file():
         raise FileNotFoundError(f"Build the selected parent cjprof library first: {prof_library}")
+    coverage_def = "-DCJPROF_CODE_COVERAGE=" + ("ON" if code_coverage else "OFF")
+    # Flags are deliberately limited to CMake's compile/link flag variables;
+    # producer type/target/library/coverage cannot be overridden through them.
+    if any(not re.fullmatch(r"-DCMAKE_(C|CXX|EXE_LINKER|SHARED_LINKER|MODULE_LINKER)_FLAGS(_[A-Z0-9_]+)?(:STRING)?=.*", flag)
+           for flag in cmake_flags):
+        raise ValueError("JNI accepts only CMake compile/link flag definitions after --")
     # Do not let an old installed JNI library survive a failed new build.
     if DIST_DIR.exists():
         shutil.rmtree(DIST_DIR)
@@ -81,13 +88,13 @@ def build_jni(debug=False, target="native", jobs=1, prof_library=None):
             "..",
             "-DCJPROF_LIBRARY=" + str(Path(prof_library).resolve()),
             "-DCJPROF_TARGET=" + target,
-            ], cwd=BUILD_DIR, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            ] + [coverage_def] + list(cmake_flags), cwd=BUILD_DIR, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         echo_info(f"{result.stdout}")
         echo_info(f"{result.stderr}")
     else:
         cmake_args = ["cmake", "-DCMAKE_BUILD_TYPE=" + build_type, "..",
                       "-DCJPROF_LIBRARY=" + str(Path(prof_library).resolve()),
-                      "-DCJPROF_TARGET=" + target]
+                      "-DCJPROF_TARGET=" + target, coverage_def] + list(cmake_flags)
         if sys.platform == "win32":
             cmake_args += ["-G", "MinGW Makefiles", "-DSTRIP_LIB_PREFIX=" + "ON"]
         subprocess.run(cmake_args, cwd=BUILD_DIR, check=True)
@@ -189,12 +196,14 @@ def default_prof_library(target):
     return SCRIPT_DIR.parent.parent / "build" / "build" / "src" / name
 
 
-def install(debug=False, target="native", prof_library=None):
+def install(debug=False, target="native", prof_library=None, code_coverage=False):
     echo_info("Installing distribution files...")
 
-    expected_type = "Debug" if debug else "Release"
+    expected_type = "Debug" if debug or code_coverage else "Release"
     if cached_value("CMAKE_BUILD_TYPE") != expected_type or cached_value("CJPROF_TARGET") != target:
         raise ValueError("JNI configuration differs from install request; run matching build first")
+    if cached_value("CJPROF_CODE_COVERAGE") != ("ON" if code_coverage else "OFF"):
+        raise ValueError("JNI coverage differs from install request; run matching build first")
     if Path(cached_value("CJPROF_LIBRARY")).resolve() != Path(prof_library or default_prof_library(target)).resolve():
         raise ValueError("JNI parent library differs from selected native producer")
     name = library_name(target)
@@ -250,19 +259,23 @@ def main():
                         default=os.environ.get("CANGJIE_BUILD_JOBS") or
                         (len(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else os.cpu_count() or 1))
     parser.add_argument("--prof-library", help="Exact built parent library")
-    args = parser.parse_args()
+    parser.add_argument("--code-coverage", action="store_true", help="enable gcov instrumentation and force Debug")
+    argv = sys.argv[1:]
+    separator = argv.index("--") if "--" in argv else len(argv)
+    flags = argv[separator + 1:]
+    args = parser.parse_args(argv[:separator])
     cmd, debug, target = args.command, args.build_type == "debug", args.target
     if cmd == "all":
         def build_and_run_with_release():
             clean()
-            build_jni(debug, target, args.jobs, args.prof_library)
+            build_jni(debug, target, args.jobs, args.prof_library, args.code_coverage, flags)
             compile_java()
             run_demo()
         build_and_run_with_release()
     elif cmd == "build":
-        build_jni(debug, target, args.jobs, args.prof_library)
+        build_jni(debug, target, args.jobs, args.prof_library, args.code_coverage, flags)
     elif cmd == "install":
-        install(debug, target, args.prof_library)
+        install(debug, target, args.prof_library, args.code_coverage)
     elif cmd == "clean":
         clean()
     elif cmd == "compile":

@@ -71,3 +71,43 @@ exact parent rc37 with cjlint as an independent control before restoration.
 Its CLI requires `--sdk`, `--dependencies`, `--work`, and `--jobs`. Running it
 requires an independently admitted SDK, private source checkout, disk/CPU/memory
 slot, and normal box/workflow entry; source review alone grants none of these.
+
+cjprof coverage uses the normal `CJPROF_CODE_COVERAGE` CMake option. The public
+producer writes ON with `--code-coverage` (forcing Debug), otherwise OFF on
+**every** configure. Parent and JNI share the option implementation; its
+instrumentation is appended in directory variables, never stored in the user's
+`CMAKE_C_FLAGS`/`CMAKE_CXX_FLAGS` cache entries. The parent forwards its selected
+cached compile/link flags, including configuration variants, into JNI. An
+explicit Release C++ flag selection and executable linker flags are preserved.
+JNI's standalone `build`/`all` accept the same coverage switch and compile/link
+flag definitions after `--`; omit the switch for an ordinary build. JNI install
+requires the matching coverage selection as well as the matching type/target.
+Parent install obtains that selection from its native cache.
+
+For a pre-option build directory, the public producer migrates only these exact
+old generated values: C `-fprofile-arcs -ftest-coverage`, and C++
+`-fprofile-arcs -ftest-coverage -DCOVERAGE_BUILD`. Each matching entry is unset
+once before normal CMake initialization; other flag values and cache entries
+stay intact. This also handles an old ordinary warm Release that retained the
+coverage values. Current explicit `-- -DCMAKE_*_FLAGS=...` options apply after
+migration; use them to retain an intentionally identical user selection.
+Environment `CFLAGS`/`CXXFLAGS` initialize the reset entries normally. Values
+already overwritten by the old producer cannot be reconstructed from its cache;
+re-supply them through the normal environment or CMake arguments. No token
+stripping or cache-wide deletion is used. Once the option exists, user flags
+are left to normal CMake cache semantics, including deliberate instrumentation.
+
+`tests/cjprof-coverage.mjs ABS/config.json` is a separate pending Linux gate for
+this changed surface. Config requires absolute `sdk`, fixed `dependencies` JSON,
+fresh `work`, positive `jobs`, and `control` (an absolute installed cjlint command
+with real business arguments). Run in a fresh isolated source checkout only,
+via the admitted box/workflow slot. It reproduces ec1ab's SOURCE finding with
+the old real producer, restores candidate sources, then checks old-cache
+migration and actual coverage -> ordinary Release -> cut -> restoration.
+Generated native/JNI commands, caches, compile/link user flags, built artifacts,
+normal install payloads, installed entry loading, exact target assertion failure,
+and independent cjlint control are recorded. Entry loading is a finite install
+check, not profiling business or SDK qualification. The old producer and option
+cut temporarily replace only this private checkout's files; finally blocks
+restore bytes. This script is supplied for resource/input admission; its
+presence does not mean any arm has run. Existing unrelated gates stay unchanged.
