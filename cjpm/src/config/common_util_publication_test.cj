@@ -50,6 +50,15 @@ public func execWithOutputPreservesScriptEnvironmentAndWorkingDirectory(): Unit 
 }
 
 @Test
+public func execWithOutputPreservesStdoutOnlyControl(): Unit {
+    let (success, outInfo, errInfo) = execWithOutput("python3",
+        ArrayList<String>(["-c", "import os; os.write(1,b'CONTROL')"]))
+    @Assert(success)
+    @Assert(outInfo, "CONTROL")
+    @Assert(errInfo, "")
+}
+
+@Test
 public func execWithOutputReportsLaunchFailure(): Unit {
     let (success, outInfo, errInfo) = execWithOutput("/nonexistent-cjpm-publication-command", ArrayList<String>())
     @Assert(!success)
