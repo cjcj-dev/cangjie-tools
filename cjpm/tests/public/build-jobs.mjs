@@ -30,12 +30,15 @@ function run(name,args,extra={}){
 function budget(name,args,jobs,extra={},nativeOnly=false){
  const r=run(name,['build','-t','release',...args],extra);
  check(name+':build-exit',r.rc===0,{rc:r.rc});
- check(name+':native-budget',r.make.length===1&&r.make.every(l=>l.includes('"-j'+jobs+'"')),r.make);
+ const rootMake=r.make.filter(l=>l.includes('["make", "-j'));
+ check(name+':native-budget',rootMake.length===1&&rootMake[0].includes('"-j'+jobs+'"'),rootMake);
+ const recursive=r.make.filter(l=>!rootMake.includes(l));
+ check(name+':recursive-make-inherits',recursive.length>0&&recursive.every(l=>!l.includes('"-j')),recursive);
  check(name+':cj-budget',nativeOnly?r.cjc.length===0:r.cjc.length===6&&r.cjc.every(l=>l.includes('"-j'+jobs+'"')),r.cjc);
  return r;
 }
 try {
- budget('explicit',['--jobs','2'],2,{CANGJIE_BUILD_JOBS:'1',MAKEFLAGS:'-j1'});
+ budget('explicit',['--jobs','2','--set-rpath','$ORIGIN/../../runtime/lib/linux_x86_64_cjnative'],2,{CANGJIE_BUILD_JOBS:'1',MAKEFLAGS:'-j1'});
  // These controls also run in the cut arm: parsing and native budget survive
  // a cut specifically disconnecting CJ's consumption of the public budget.
  for(const value of ['0','-1','word','1.5']){
@@ -43,10 +46,10 @@ try {
   check('invalid '+value+':argparse',r.rc===2&&/jobs must be a positive integer/.test(fs.readFileSync(r.stderr,'utf8')),{rc:r.rc});
   check('invalid '+value+':no-build',r.make.length===0&&r.cjc.length===0,{make:r.make,cjc:r.cjc});
  }
- if(arm!=='cut'){
+ if(!arm.startsWith('cut')){
   budget('env-default',['--native-only'],1,{CANGJIE_BUILD_JOBS:'1',MAKEFLAGS:undefined},true);
   // taskset/cpuset supplies the default on Linux; do not assume host CPU count.
-  budget('affinity-default',['--native-only'],os.availableParallelism(),{CANGJIE_BUILD_JOBS:undefined,MAKEFLAGS:undefined},true);
+  budget('affinity-default',[],os.availableParallelism(),{CANGJIE_BUILD_JOBS:undefined,MAKEFLAGS:undefined});
   budget('explicit-precedence',['-j','2','--native-only'],2,{CANGJIE_BUILD_JOBS:'invalid',MAKEFLAGS:'-j1'},true);
   const envBad=run('invalid-env',['build','-t','release','--native-only'],{CANGJIE_BUILD_JOBS:'0'});
   check('invalid env:argparse',envBad.rc===2&&envBad.make.length===0&&envBad.cjc.length===0,{rc:envBad.rc});
