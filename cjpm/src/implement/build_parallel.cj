@@ -422,7 +422,9 @@ private func registerCompileTasks(
             compileTask.requireTasks.toArray()
         }
 
-        registerCompilerCallTaskWithDeps(engine, compileTask, taskDeps, buildConfig)
+        let invocationDeps = ArrayList<TaskId>(taskDeps)
+        invocationDeps.add(TaskId.ReadCompilerOptions(compileTask.id.toString()))
+        registerCompilerCallTaskWithDeps(engine, compileTask, invocationDeps.toArray(), buildConfig)
 
         let monitorId = TaskId.Monitor(
             compileTask.fullName, 
@@ -505,27 +507,18 @@ private func registerReadSourceTask(engine: IncrementalEngine, compileTask: Comp
 
 // Create task which stores the hash code of compiler options, which are not affecting the stored location of the binary
 private func registerReadCompilerOptionsTask(engine: IncrementalEngine, compileTask: CompileTask, buildConfig: BuildConfig): Unit {
-    let id = TaskId.ReadCompilerOptions(compileTask.fullName, compileTask.target, compileTask.isDebug, compileTask.mockSupported, compileTask.sourceSetDir)
+    let id = TaskId.ReadCompilerOptions(compileTask.id.toString())
 
     if (engine.taskContext.taskStorage.contains(id)) {
         return
     }
 
-    // Note: We intentionally ignore requiredForTests/exportForTests flags in the hash 
-    // to allow cache reused between `cjpm build` and `cjpm test`.
-    // There's too many scenarious, when redundant rebuilds occur, without this workaround
-    // The proper incrementation between those scenarious is a separate task
+    // Compile and split-link phases have different options and their own input.
+    // Keep test exports, subpackage handling and link flags exactly as emitted.
     let comp: () -> CompilerOptions = { =>
-        let res = ArrayList<String>()
-        res.add(all: appendCommandOptions(compileTask, ignoreTestFlags: compileTask.requiredForTests))
-        for (option in compileTask.customizedOption) {
-            res.add(all: extractOptionByString(option))
-        }
-        res.add(all: extractOptionByString(compileTask.compileOption))
-        res.add(all: extractOptionByString(compileTask.overrideOption))
-        res.add(all: appendLinkOption(compileTask, ignoreTestFlags: compileTask.requiredForTests))
-        res.add(all: getTypeCommand(compileTask, ignoreTestFlags: compileTask.requiredForTests))
-        CompilerOptions.fromString(res |> collectString(delimiter: " "))
+        let res = appendCommandOptions(compileTask)
+        res.add(all: appendCompilerOptions(compileTask))
+        CompilerOptions.fromArgs(res)
     }
     engine.taskContext.createTask(
         id: id,
@@ -630,7 +623,11 @@ extend PackageSource <: SerializableIncData<PackageSource> {
                     it.name.endsWith(".cj") &&
                     !it.name.endsWith("_test.cj")
                 }
-                .map { it => it.lastModificationTime } |>
+                .map { it =>
+                    let name = it.name
+                    let source = String.fromUtf8(File.readFrom(it.path))
+                    "${name.size}:${name}${source.size}:${source}"
+                } |>
                 unorderedHash
         }
         return None
@@ -650,8 +647,10 @@ private struct CompilerOptions <: Serializable<CompilerOptions> {
         CompilerOptions(dmint.getValue())
     }
 
-    static func fromString(options: String): CompilerOptions {
-        CompilerOptions(options.hashCode())
+    static func fromArgs(options: ArrayList<String>): CompilerOptions {
+        // Preserve argv boundaries: ["a b"] and ["a", "b"] are distinct inputs.
+        let encoded = options.iterator() |> map { arg: String => "${arg.size}:${arg}" } |> collectString(delimiter: "")
+        CompilerOptions(encoded.hashCode())
     }
 }
 
@@ -771,8 +770,8 @@ extend ArtifactGroup <: SerializableIncData<ArtifactGroup> {
 public enum TaskId <: Serializable<TaskId> & ToString {
     // fullname, sourceSetDir
     | ReadPackageSource(String, String)
-    // fullname, target, debug, mock, sourceSetDir
-    | ReadCompilerOptions(String, String, Bool, Bool, String)
+    // Serialized Compile/Link task ID: one option input per actual invocation.
+    | ReadCompilerOptions(String)
     // fullName, target, debug, mock, outputType, sourceSetDir - Compile task (produces .cjo or .o depending on outputType)
     | Compile(String, String, Bool, Bool, OutputType, String)
     // fullName, target, debug, mock, outputType, sourceSetDir - Link task (links .o files into final binary)
@@ -786,7 +785,7 @@ public enum TaskId <: Serializable<TaskId> & ToString {
     public func toString(): String {
         match (this) {
             case ReadPackageSource(fullName, sourceSetDir) => "read~${fullName}|${sourceSetDir}"
-            case ReadCompilerOptions(fullName, target, debug, mock, sourceSetDir) => "options~${fullName}|${target}|${debug}|${mock}|${sourceSetDir}"
+            case ReadCompilerOptions(invocation) => "options~${invocation}"
             case Compile(fullName, target, debug, mock, outputType, sourceSetDir) => "compile~${fullName}|${target}|${debug}|${mock}|${outputType}|${sourceSetDir}"
             case Link(fullName, target, debug, mock, outputType, sourceSetDir) => "link~${fullName}|${target}|${debug}|${mock}|${outputType}|${sourceSetDir}"
             case Monitor(fullName, target, debug, mock, sourceSetDir) => "monitor~${fullName}|${target}|${debug}|${mock}|${sourceSetDir}"
@@ -847,13 +846,9 @@ public enum TaskId <: Serializable<TaskId> & ToString {
         let values = splitted[1].split("|")
         match (splitted[0]) {
             case "read" => TaskId.ReadPackageSource(values[0], values.get(1) ?? "")
-            case "options" =>
-                TaskId.ReadCompilerOptions(
-                    values[0],
-                    values[1],
-                    Bool.parse(values[2]),
-                    Bool.parse(values[3]),
-                    values.get(4) ?? "")
+            // Older package-wide option IDs remain readable but do not match
+            // the new invocation-specific IDs, so their dependents rebuild.
+            case "options" => TaskId.ReadCompilerOptions(splitted[1])
             case "compile" =>
                 TaskId.Compile(
                     values[0],
@@ -1323,7 +1318,6 @@ func createPackageCompileTasks(r: ResolveItem, buildConfig: BuildConfig, product
                 requireTasks.add(depTask)
             }
             requireTasks.add(TaskId.ReadPackageSource(fullName, sourceSetDir))
-            requireTasks.add(TaskId.ReadCompilerOptions(fullName, target, isDebug, mockSupported, sourceSetDir))
 
             let (outLogFile, errLogFile) = getLogFile(logPath, taskId)
 
@@ -1868,7 +1862,8 @@ private func getCompilePackageDesc(compileTask: CompileTask): String {
 }
 
 private func callCompiler(compileTask: CompileTask, args: ArrayList<String>, envBuilder: EnvironmentBuilder, buildConfig: BuildConfig): Bool {
-    var execCmdFlag: Bool = true
+    // Only an observed successful compiler exit can make this task succeed.
+    var execCmdFlag: Bool = false
 
     specifyCjcJobs(args, buildConfig.cjcJobs)
 

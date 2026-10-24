@@ -15,7 +15,7 @@ import std.env.getVariables
 import stdx.encoding.json.*
 import stdx.serialization.serialization.*
 import cjpm.config.*
-import cjpm.util.{Result, PackageFqName}
+import cjpm.util.{Result, PackageFqName, unorderedHash}
 
 var dependencyMap: HashMap<String, HashSet<String>> = HashMap<String, HashSet<String>>()
 @When[os == "Windows"]
@@ -512,6 +512,10 @@ func parallelTest(testConfig: TestConfig, testPkgsMap: HashMap<PackageFqName, Pk
         return false
     }
 
+    // A skipped build ran existing binaries, not the current source inputs.
+    if (testConfig.skipBuild) {
+        return true
+    }
     return saveTestIncremental(testConfig, testPkgsMap)
 }
 
@@ -816,15 +820,15 @@ func mkExecTestPackageCommand(testConfig: TestConfig, pkgFullName: String): Test
 
 func compileAllTests(linkMap: HashMap<PackageFqName, Array<String>>, testPkgsMap: HashMap<PackageFqName, PkgDescTest>,
     testConfig: TestConfig): Bool {
-    if (testConfig.skipBuild || testPkgsMap.isEmpty()) {
-        if (testPkgsMap.isEmpty()) { // if no test package to compile, then generate dummy runner
-            if (!checkTestDir(testConfig.globalConfig.targetDir, testPkgsMap.values())) {
-                return false
-            }
-            TestRunner.generateSources(testConfig)
-            TestRunner.compile(testConfig)
-        }
+    if (testConfig.skipBuild) {
         return true
+    }
+    if (testPkgsMap.isEmpty()) { // if no test package to compile, then generate dummy runner
+        if (!checkTestDir(testConfig.globalConfig.targetDir, testPkgsMap.values())) {
+            return false
+        }
+        TestRunner.generateSources(testConfig)
+        return TestRunner.compile(testConfig)
     }
 
     if (!checkTestDir(testConfig.globalConfig.targetDir, testPkgsMap.values())) {
@@ -836,7 +840,8 @@ func compileAllTests(linkMap: HashMap<PackageFqName, Array<String>>, testPkgsMap
         let finalTestPkgsMap = HashMap<PackageFqName, PkgDescTest>()
         for ((pkgFqName, pkgDesc) in testPkgsMap) {
             if (testConfig.rebuildList.contains(pkgDesc.fqname.value) || rebuildTestPkgs(testConfig, pkgDesc.fqname) ||
-                    rebuildPureTestPkgs(testConfig, pkgDesc.srcDir, pkgDesc.fqname)) {
+                    rebuildTestSources(testConfig, pkgDesc.srcDir, pkgDesc.fqname) ||
+                    rebuildPureTestDependencies(testConfig, pkgDesc.fqname)) {
                 finalTestPkgsMap.add(pkgDesc.fqname, pkgDesc)
             }
         }
@@ -870,18 +875,20 @@ func rebuildTestPkgs(testConfig: TestConfig, fqname: PackageFqName): Bool {
     }
 }
 
-// Check pure test packages: rebuild if source files are changed or depended packages are changed
-func rebuildPureTestPkgs(testConfig: TestConfig, pkgSrcDir: CJMPSource, pkgName: PackageFqName): Bool {
+// Every test compilation consumes its test sources, including mixed packages.
+func rebuildTestSources(testConfig: TestConfig, pkgSrcDir: CJMPSource, pkgName: PackageFqName): Bool {
+    try {
+        return getTestSourceHash(pkgSrcDir) != testConfig.incrementalCache[pkgName.value]["testSourceHash"]
+    } catch (e: Exception) {
+        // Old caches lack this input and must be upgraded by recompiling tests.
+        return true
+    }
+}
+
+// Pure test packages also depend on rebuilt production packages.
+func rebuildPureTestDependencies(testConfig: TestConfig, pkgName: PackageFqName): Bool {
     if (!testConfig.testPkgs.contains(pkgName.value)) {
         return false
-    }
-
-    try {
-        if (getFileTimeStamp(pkgSrcDir) != testConfig.incrementalCache[pkgName.value]["fileTimeStamp"]) {
-            return true
-        }
-    } catch (e: Exception) {
-        return true
     }
 
     for (require in testConfig.packageDepMap[pkgName.value].requires) {
@@ -901,7 +908,7 @@ func loadTestIncremental(testConfig: TestConfig): Unit {
     }
 
     // load json file
-    // format: pkgName -> (fileTimeStamp, binTimeStamp)
+    // format: pkgName -> (testSourceHash, binTimeStamp); runner keeps its timestamp
     var buf: String = ""
     try {
         buf = String.fromUtf8(File.readFrom(testCachePath))
@@ -943,24 +950,25 @@ func saveTestIncremental(testConfig: TestConfig, testPkgsMap: HashMap<PackageFqN
         } else {
             pkgCache.add("binTimeStamp", "")
         }
-        // collect file time stamp
-        pkgCache.add("fileTimeStamp", getFileTimeStamp(pkgDesc.srcDir))
+        // Record the same test-source input consumed by incremental selection.
+        pkgCache.add("testSourceHash", getTestSourceHash(pkgDesc.srcDir))
         testConfig.incrementalCache.add(pkgDesc.fqname.value, pkgCache)
     }
     let cacheStr = testConfig.incrementalCache.serialize().toJson().toJsonString()
     return createAndWriteFile(testBinPath.join(INCREMENTAL_CACHE).toString(), cacheStr)
 }
 
-// Collect file timestamp for pure test packages
-func getFileTimeStamp(pkgSrcDir: CJMPSource): String {
-    var timeStamp: Int64 = Int64.Min
-    for (fileInfo in pkgSrcDir.files()) {
-        let fileName = fileInfo.path.toString()
-        if (fileName.endsWith("_test.cj")) {
-            timeStamp = max(timeStamp, fileInfo.lastModificationTime.toUnixTimeStamp().toSeconds())
+// Hash file identity and contents, rather than a maximum timestamp. This
+// detects additions, removals and same-timestamp edits independent of order.
+func getTestSourceHash(pkgSrcDir: CJMPSource): String {
+    let files = pkgSrcDir.files()
+        .filter { info => info.path.toString().endsWith("_test.cj") }
+        .map { info =>
+            let name = info.path.toString()
+            let source = String.fromUtf8(File.readFrom(info.path))
+            "${name.size}:${name}${source.size}:${source}"
         }
-    }
-    return timeStamp.toString()
+    return (files |> unorderedHash).toString()
 }
 
 // Create a unittest directory to store middle files.
@@ -1008,13 +1016,13 @@ func parallelCompileTests(
     let testFut = ArrayList<Future<Bool>>()
     for ((pkgFqName, pkgDesc) in testPkgsMap) {
         sem.acquire()
-        if (pkgDesc.hasTestsInProdFiles && !pkgDesc.hasTestFiles) {
-            // If no test files, then generate dummy test file to further run prod package's tests
-            DummyTestFile.generateSources(testConfig.globalConfig.targetDir, pkgDesc.fqname.value)
-            DummyTestFile.compile(testConfig, pkgDesc, linkMap)
-        }
         testFut.add(spawn { =>
             try {
+                if (pkgDesc.hasTestsInProdFiles && !pkgDesc.hasTestFiles) {
+                    // Propagate dummy compilation failures through the test future.
+                    DummyTestFile.generateSources(testConfig.globalConfig.targetDir, pkgDesc.fqname.value)
+                    return DummyTestFile.compile(testConfig, pkgDesc, linkMap)
+                }
                 let rootPkgName: String = getRootPkgName(swapOrgName(pkgDesc.fqname.value))
                 let outLogFile = testLogPath.join(rootPkgName).join("${swapOrgName(pkgDesc.fqname.value)}.outlog").toString()
                 let errLogFile = testLogPath.join(rootPkgName).join("${swapOrgName(pkgDesc.fqname.value)}.errlog").toString()
@@ -1028,6 +1036,9 @@ func parallelCompileTests(
                 let flag = packageTestIfNeeded(pkgInfo, testConfig, pkgDesc)
                 logger.log((pkgInfo.outLogFile, pkgInfo.errLogFile))
                 return flag
+            } catch (e: Exception) {
+                eprintln("Error: failed to compile tests for `${pkgFqName}` at ${pkgDesc.srcDir.allPaths}: ${e.message}")
+                return false
             } finally {
                 sem.release()
                 logger.release()

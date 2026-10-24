@@ -443,12 +443,12 @@ class DepModel {
                     "must be '${Exe}' for cjpm install")
                 return Option.None
             }
-            COMMON_INFO.moduleVersionMap.add(tomlInfo.pkg.name, tomlInfo.pkg.version)
             if (tomlInfo.pkg.organization.isEmpty()) {
                 this.globalConfig.rootName = tomlInfo.pkg.name
             } else {
                 this.globalConfig.rootName = tomlInfo.pkg.organization + "::" + tomlInfo.pkg.name
             }
+            COMMON_INFO.moduleVersionMap.add(this.globalConfig.rootName, tomlInfo.pkg.version)
         }
         return (tomlInfo, curModulePath)
     }
@@ -863,15 +863,30 @@ class DepModel {
         }
         let pkgPath = pkgSource.allPaths[0]
         let pkgPathString = pkgPath.toString()
-        if (!isTest && this.pkgBuildDepCacheMap.contains(pkgPathString) && (timeStamp == this.pkgBuildDepCacheMap[pkgPathString].timeStamp)) {
+        // Dependency edges and production test markers consume source contents,
+        // not just the latest modification second in the package.
+        let sourceHash = pkgSource.files()
+            .filter { it => it.path.extensionName == "cj" && (isTest || !it.name.endsWith("_test.cj")) }
+            .map { it =>
+                let path = it.path.toString()
+                let source = String.fromUtf8(File.readFrom(it.path))
+                "${path.size}:${path}${source.size}:${source}"
+            } |> unorderedHash
+        let options = scanDependencyArguments(pkgPath, isTest, compileOptions).iterator()
+            .map { it => "${it.size}:${it}" } |> collectString(delimiter: "")
+        let fingerprint = "${sourceHash}:${options}"
+        if (!isTest && this.pkgBuildDepCacheMap.contains(pkgPathString) &&
+            fingerprint == this.pkgBuildDepCacheMap[pkgPathString].sourceFingerprint) {
             return Ok(this.pkgBuildDepCacheMap[pkgPathString])
-        } else if (isTest && this.pkgTestDepCacheMap.contains(pkgPathString) && (timeStamp == this.pkgTestDepCacheMap[pkgPathString].timeStamp)) {
+        } else if (isTest && this.pkgTestDepCacheMap.contains(pkgPathString) &&
+            fingerprint == this.pkgTestDepCacheMap[pkgPathString].sourceFingerprint) {
             return Ok(this.pkgTestDepCacheMap[pkgPathString])
         }
         // update pkgDepCacheMap
         scanDependency(pkgPath, isTest: isTest, compileOptions: compileOptions).inspect { depRes =>
             var dep = depRes
             dep.timeStamp = timeStamp
+            dep.sourceFingerprint = fingerprint
             synchronized (this.scanPkgMtx) {
                 if (isTest) {
                     this.pkgTestDepCacheMap.add(pkgPathString, dep)
@@ -1551,7 +1566,7 @@ enum ScanDependencyError <: ToString {
     }
 }
 
-func scanDependency(packagePath: Path, isTest!: Bool = false, compileOptions!: String = ""): Result<RequiresPackages, ScanDependencyError> {
+private func scanDependencyArguments(packagePath: Path, isTest: Bool, compileOptions: String): ArrayList<String> {
     let arguments = ArrayList<String>()
     arguments.add(all: ["-p", "${packagePath}"])
     arguments.add("--scan-dependency")
@@ -1560,7 +1575,11 @@ func scanDependency(packagePath: Path, isTest!: Bool = false, compileOptions!: S
         arguments.add("--test")
     }
     arguments.add(all: extractCfgOption(compileOptions))
+    return arguments
+}
 
+func scanDependency(packagePath: Path, isTest!: Bool = false, compileOptions!: String = ""): Result<RequiresPackages, ScanDependencyError> {
+    let arguments = scanDependencyArguments(packagePath, isTest, compileOptions)
     let cmd: String = COMPILE_TOOL + " " + String.join(arguments.toArray(), delimiter: " ")
     let (scanFlag, out, error) = execWithOutput(COMPILE_TOOL, arguments)
 

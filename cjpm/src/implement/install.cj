@@ -154,6 +154,7 @@ func installProject(installConfig: InstallConfig): Bool {
     installConfig.globalConfig.targetDir = buildConfig.globalConfig.targetDir
     installConfig.globalConfig.ldPath = buildConfig.globalConfig.ldPath
     installConfig.globalConfig.originDir = buildConfig.globalConfig.originDir
+    installConfig.globalConfig.rootName = buildConfig.globalConfig.rootName
 
     let flag = installBinary(installConfig)
     saveInstallList(installConfig.root)
@@ -164,7 +165,12 @@ func isSkipBuild(installConfig: InstallConfig): Bool {
     let tomlInfo: TomlInfo = loadModuleFile(installConfig.globalConfig.rootPath) ?? return false
     if (tomlInfo.isPkgConfig) {
         COMMON_INFO.singleModuleName = tomlInfo.pkg.name
-        COMMON_INFO.moduleVersionMap.add(tomlInfo.pkg.name, tomlInfo.pkg.version)
+        installConfig.globalConfig.rootName = if (tomlInfo.pkg.organization.isEmpty()) {
+            tomlInfo.pkg.name
+        } else {
+            tomlInfo.pkg.organization + "::" + tomlInfo.pkg.name
+        }
+        COMMON_INFO.moduleVersionMap.add(installConfig.globalConfig.rootName, tomlInfo.pkg.version)
     } else {
         if (!checkForWorkspace(installConfig.globalConfig.rootPath, tomlInfo, installConfig.memberModule,
             isDebug: installConfig.debug)) {
@@ -172,7 +178,12 @@ func isSkipBuild(installConfig: InstallConfig): Bool {
         }
         for (member in COMMON_INFO.buildMembers) {
             let memberTomlInfo: TomlInfo = loadModuleFile(member) ?? return false
-            COMMON_INFO.moduleVersionMap.add(memberTomlInfo.pkg.name, memberTomlInfo.pkg.version)
+            let moduleName = if (memberTomlInfo.pkg.organization.isEmpty()) {
+                memberTomlInfo.pkg.name
+            } else {
+                memberTomlInfo.pkg.organization + "::" + memberTomlInfo.pkg.name
+            }
+            COMMON_INFO.moduleVersionMap.add(moduleName, memberTomlInfo.pkg.version)
         }
     }
     installConfig.globalConfig.originDir = installConfig.globalConfig.targetDir
@@ -224,19 +235,19 @@ func installSingleBinary(installConfig: InstallConfig): Bool {
     let dstBin = Path(installConfig.root).join(BIN)
     try {
         if (!installConfig.installName.isEmpty()) {
-            copy(srcBin.join(makeExeName(installConfig.installName)),
+            copy(srcBin.join(makeExeName(swapOrgName(installConfig.installName))),
                 to: dstBin.join(makeExeName(installConfig.installName)), overwrite: true)
             if (!installDynamicLibs(installConfig, installConfig.installName)) {
                 return false
             }
-            return addInstallList(installConfig, moduleName, installConfig.installName)
+            return addInstallList(installConfig, installConfig.globalConfig.rootName, installConfig.installName)
         }
         if (fileExists(srcBin.join(makeExeName("main")))) {
             copy(srcBin.join(makeExeName("main")), to: dstBin.join(makeExeName(moduleName)), overwrite: true)
             if (!installDynamicLibs(installConfig, moduleName)) {
                 return false
             }
-            return addInstallList(installConfig, moduleName, moduleName)
+            return addInstallList(installConfig, installConfig.globalConfig.rootName, moduleName)
         }
         return installAllExe(installConfig)
     } catch (e: Exception) {
@@ -265,7 +276,7 @@ func installWorkspaceBinary(installConfig: InstallConfig): Bool {
             eprintln("Error: no matched binary named '${installConfig.installName}'")
             return false
         }
-        copy(srcBin.join(makeExeName(installConfig.installName)),
+        copy(srcBin.join(makeExeName(swapOrgName(installConfig.installName))),
             to: dstBin.join(makeExeName(installConfig.installName)), overwrite: true)
         if (!installDynamicLibs(installConfig, installConfig.installName)) {
             return false
@@ -285,7 +296,7 @@ func installAllExe(installConfig: InstallConfig): Bool {
     for (resolve in resInfo.resolves) {
         if (let Exe <- resolve.outputType) {
             let binName = resolve.fullName
-            copy(srcBin.join(makeExeName(binName)), to: dstBin.join(makeExeName(binName)), overwrite: true)
+            copy(srcBin.join(makeExeName(swapOrgName(binName))), to: dstBin.join(makeExeName(binName)), overwrite: true)
             if (!installDynamicLibs(installConfig, binName)) {
                 return false
             }

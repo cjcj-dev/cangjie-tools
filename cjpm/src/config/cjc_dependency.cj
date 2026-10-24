@@ -79,6 +79,7 @@ public class RequiresPackages <: Serializable<RequiresPackages> {
     public var features: HashSet<Feature> = HashSet()
     public var product: Bool = false
     public var timeStamp: Int64 = 0
+    public var sourceFingerprint: String = ""
 
     public func serialize(): DataModel {
         let result = DataModelStruct()
@@ -86,6 +87,7 @@ public class RequiresPackages <: Serializable<RequiresPackages> {
         result.add(field<Bool>("isMacro", this.isMacroPackage))
         result.add(field<String>("accessLevel", this.accessLevel))
         result.add(field<Int64>("timeStamp", this.timeStamp))
+        result.add(field<String>("sourceFingerprint", this.sourceFingerprint))
         result.add(field<ArrayList<FullName>>(DEPENDENCIES, this.dependencies))
         result.add(field<StdDeps>("std-dependencies", this.stdDependencies))
         result.add(field("features", features |> map { it => it.toString() } |> collectArray))
@@ -105,6 +107,7 @@ public class RequiresPackages <: Serializable<RequiresPackages> {
         result.isMacroPackage = Bool.deserialize(dms.get("isMacro"))
         result.accessLevel = String.deserialize((dms.get("accessLevel") as DataModelString) ?? DataModelString("public"))
         result.timeStamp = Int64.deserialize((dms.get("timeStamp") as DataModelInt) ?? DataModelInt(0))
+        result.sourceFingerprint = String.deserialize((dms.get("sourceFingerprint") as DataModelString) ?? DataModelString(""))
         result.testUsed = Bool.deserialize((dms.get("testUsed") as DataModelBool) ?? DataModelBool(false))
         result.features = Array<String>
             .deserialize((dms.get("features") as DataModelSeq) ?? DataModelSeq())

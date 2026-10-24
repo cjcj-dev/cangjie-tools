@@ -534,10 +534,17 @@ func constructCjcInvocation(compileTask: CompileTask, buildConfig: BuildConfig):
         res.add(all: getDepLinkCommand(compileTask, buildConfig))
     }
 
+    res.add(all: appendCompilerOptions(compileTask))
+    return res
+}
+
+// Shared by the actual invocation and its incremental input. Dependency paths
+// are constructed separately after their producing tasks have completed.
+func appendCompilerOptions(compileTask: CompileTask): ArrayList<String> {
+    let res = ArrayList<String>()
     for (option in compileTask.customizedOption) {
         res.add(all: extractOptionByString(option))
     }
-
     res.add(all: extractOptionByString(compileTask.compileOption))
     res.add(all: extractOptionByString(compileTask.overrideOption))
     res.add(all: appendLinkOption(compileTask))
@@ -574,7 +581,7 @@ func appendImportPaths(compileTask: CompileTask, buildConfig: BuildConfig): Arra
     return res
 }
 
-func appendCommandOptions(compileTask: CompileTask, ignoreTestFlags!: Bool = false): ArrayList<String> {
+func appendCommandOptions(compileTask: CompileTask): ArrayList<String> {
     let res = ArrayList<String>()
     if (state.isExperimental) {
         res.add("--experimental")
@@ -591,18 +598,18 @@ func appendCommandOptions(compileTask: CompileTask, ignoreTestFlags!: Bool = fal
     if (compileTask.mockSupported) {
         res.add("--mock=on")
     }
-    if (compileTask.outputType != Chir && !compileTask.hasSubPkgs && (!ignoreTestFlags && !compileTask.requiredForTests)) {
+    if (compileTask.outputType != Chir && !compileTask.hasSubPkgs && !compileTask.requiredForTests) {
         res.add("--no-sub-pkg")
     }
     res.add("--output-dir=${compileTask.targetPath}")
     res
 }
 
-func appendLinkOption(compileTask: CompileTask, ignoreTestFlags!: Bool = false): ArrayList<String> {
+func appendLinkOption(compileTask: CompileTask): ArrayList<String> {
     if (compileTask.linkOption.isEmpty()) {
         return ArrayList<String>()
     }
-    if (compileTask.outputType == Static && (!ignoreTestFlags && !compileTask.requiredForTests)) {
+    if (compileTask.outputType == Static && !compileTask.requiredForTests) {
         return ArrayList<String>()
     }
     return ArrayList<String>(["--link-options", compileTask.linkOption])
@@ -644,14 +651,14 @@ func getOutput(compileTask: CompileTask): Option<String> {
     }
 }
 
-func getTypeCommand(compileTask: CompileTask, ignoreTestFlags!: Bool = false): ArrayList<String> {
+func getTypeCommand(compileTask: CompileTask): ArrayList<String> {
     let res = ArrayList<String>()
     if (compileTask.isAnalysisCompilePerformance) {
         res.add("--profile-compile-time")
         res.add("--profile-compile-memory")
     }
 
-    if (!ignoreTestFlags && compileTask.exportForTests) {
+    if (compileTask.exportForTests) {
         res.add("--export-for-test")
     }
 
