@@ -13,7 +13,7 @@ import std.unittest.testmacro.*
 // Write more than a pipe can hold to each stream, in opposite stream order.
 const PUBLICATION_PIPE_BYTES: Int64 = 262144
 const PUBLICATION_PIPE_PROGRAM: String =
-    "import os,sys; n=int(sys.argv[1]); os.write(2,b'E'*n); os.write(1,b'O'*n); sys.exit(int(sys.argv[2]))"
+    "import os,sys; n=int(sys.argv[1]); assert sys.platform!='linux' or n>__import__('fcntl').fcntl(1,__import__('fcntl').F_GETPIPE_SZ); assert sys.platform!='linux' or n>__import__('fcntl').fcntl(2,__import__('fcntl').F_GETPIPE_SZ); os.write(2,b'E'*n); os.write(1,b'O'*n); sys.exit(int(sys.argv[2]))"
 
 func assertPublicationPipeResult(success: Bool, outInfo: String, errInfo: String, expectedSuccess: Bool): Unit {
     @Assert(success, expectedSuccess)
